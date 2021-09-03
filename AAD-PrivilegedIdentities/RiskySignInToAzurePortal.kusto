@@ -1,0 +1,36 @@
+id: d82a024f-bdae-4819-a590-2a8d8318b40b
+name: Risky sign-in events to Azure Portal without applied Conditional Access Policies.
+description: |
+  'This query over Azure Active Directory sign-in events will search for risky sign-in events and non-applied Conditional Access Policies by accessing the Azure Portal."
+severity: Medium
+requiredDataConnectors:
+  - connectorId: AzureActiveDirectory
+    dataTypes:
+      - SigninLogs
+  - connectorId: AzureActiveDirectory
+    dataTypes:
+      - AADNonInteractiveUserSignInLogs
+queryFrequency: 1h
+queryPeriod: 1h
+triggerOperator: gt
+triggerThreshold: 0
+tactics:
+  - InitialAccess
+relevantTechniques:
+  - T1078
+query: |
+  union AADNonInteractiveUserSignInLogs, SigninLogs
+  | where ConditionalAccessStatus == "notApplied" and ResultType == "0"
+  | where RiskLevelDuringSignIn != "none" or RiskLevelAggregated != "none"
+  | where UserPrincipalName contains "RiskyGuest"
+  | project timestamp = TimeGenerated, AccountCustomEntity = UserPrincipalName, IPCustomEntity = IPAddress, AppDisplayName, RiskLevelDuringSignIn, RiskLevelAggregated, RiskDetail, RiskState, IsRisky, OriginalRequestId
+entityMappings:
+  - entityType: Account
+    fieldMappings:
+      - identifier: FullName
+        columnName: AccountCustomEntity
+  - entityType: IP
+    fieldMappings:
+      - identifier: Address
+        columnName: IPCustomEntity
+version: 1.0.0
