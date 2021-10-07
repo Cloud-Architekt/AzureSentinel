@@ -20,7 +20,7 @@ query: |
   let timeFrame = 1h;
   let resetDiff = 10m;
   AuditLogs
-  | where TimeGenerated >= ago(timeFrame) W
+  | where TimeGenerated >= ago(timeFrame)
   | where OperationName == "Reset password (by admin)"
   | extend PasswordResetTime = TimeGenerated, UserPrincipalName = tostring(TargetResources[0].userPrincipalName), PasswordResetIP = tostring(InitiatedBy.user.ipAddress)
   | join kind= inner (
