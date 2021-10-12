@@ -37,7 +37,7 @@ query: |
   | where TAPGeneratedTime > SuccessLogonTime and TAPGeneratedTime - SuccessLogonTime <= logonDiff
   | summarize TAPGeneratedTime = max(TAPGeneratedTime), SuccessLogonTime = max(SuccessLogonTime) by UserPrincipalName, TAPInitiatingUserOrApp
   | extend timestamp = TAPGeneratedTime, AccountCustomEntity = TAPInitiatingUserOrApp
-  entityMappings:
+entityMappings:
   - entityType: Account
     fieldMappings:
       - identifier: FullName
