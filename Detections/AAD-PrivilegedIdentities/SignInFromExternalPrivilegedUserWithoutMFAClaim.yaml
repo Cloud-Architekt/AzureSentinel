@@ -1,4 +1,4 @@
-id: 9899789c-2f82-4560-9539-90396c264f3a
+id: ac0f93cf-249b-4515-b80e-c0a2ae96cb07
 name: Sign-in activity from external (privileged) user without MFA claim in the token.
 description: |
   'This query over Azure Active Directory sign-in events will search for external privileged users (based on your defined adminAccountPreffix) without passing MFA requirements as satisfied in token's claim. This could be use as detection for access to inviting tenant without passing MFA requirements in the home tenant."
