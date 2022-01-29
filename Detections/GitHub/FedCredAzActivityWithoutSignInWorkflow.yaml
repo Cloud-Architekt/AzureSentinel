@@ -1,4 +1,4 @@
-id: IN WORK1
+id: 4918822d-6b9a-49cf-ac81-c9d418fdbcd9
 name: ' Azure Activity with Federated Credentials outside of GitHub Workflow activity'
 description: |
   'Service Principal with Federated Credentials has been used for Azure Management but no GitHub workflow or sign-in event was audited in the activity time window.'
