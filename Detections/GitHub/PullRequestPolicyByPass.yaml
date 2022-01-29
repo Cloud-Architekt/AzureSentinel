@@ -1,0 +1,37 @@
+id: 63cd5f0b-ab93-4461-b2bc-525c3a6482b7
+name: 'GitHub Pull Request Policy Bypassing - Historic allow list'
+description: |
+  'This detection builds an allow list of historic PR policy bypasses and compares to recent history, flagging pull request bypasses that are not manually in the allow list and not historically included in the allow list.'
+severity: High
+requiredDataConnectors: []
+queryFrequency: 1d
+queryPeriod: 1d
+triggerOperator: gt
+triggerThreshold: 0
+tactics:
+  - Execution
+relevantTechniques:
+  - T1098
+query: |
+  let starttime = 14d;
+  let endtime = 2d;
+  // Add GitHub user names to Authorized Bypassers to ignore policy bypasses by certain authorized users
+  let AuthorizedBypassers = dynamic(['GitHub1', 'GitHub2']);
+  let historicBypassers = GitHubAuditLogPolling_CL
+  | where TimeGenerated between (ago(starttime) .. ago(endtime))
+  | where action_s == "protected_branch.policy_override"
+  | distinct actor_s;
+  GitHubAuditLogPolling_CL
+  | where TimeGenerated >= ago(endtime)
+  | where action_s == "protected_branch.policy_override"
+  | where actor_s !in (historicBypassers) and actor_s !in (AuthorizedBypassers)
+  | extend date_time = unixtime_milliseconds_todatetime(_timestamp_d)
+  | extend organization = split(repo_s, "/")[0]
+  | extend repository = split(repo_s, "/")[1]
+  | project TimeGenerated = date_time, AccountCustomEntity = actor_s, organization = org_s, repository, branch = branch_s, action = action_s
+entityMappings:
+  - entityType: Account
+    fieldMappings:
+      - identifier: FullName
+        columnName: AccountCustomEntity
+version: 1.0.0

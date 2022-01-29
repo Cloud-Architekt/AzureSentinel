@@ -1,0 +1,65 @@
+id: 85ee0e7f-330c-4a5c-95e0-3347efdf7079
+name: 'Sign-in with Azure AD Federated Credentials from new GitHub workflow'
+description: |
+  'Detection is looking for new workflows which might be using federated credentials for authentication to Azure AD. List of sensitive federated credentials (and related repos) are defined in WatchList. Query on GitHub audit logs to detect new workflows from this repositories which haven't seen in the past 2 weeks. Correlation of executed workflow time range with sign-events to federated credentials as indicator.'
+severity: Medium
+requiredDataConnectors: []
+queryFrequency: 14d
+queryPeriod: 4h
+triggerOperator: gt
+triggerThreshold: 0
+tactics:
+  - Persistence
+  - Impact
+relevantTechniques:
+  - T1098
+  - T1496
+query: |
+  let starttime = 14d;
+  let endtime = 4h;
+  let GitHubFederated = _GetWatchlist('GitHubFederatedCredentials');
+  // Generates list of workflow jobs in the past
+  let HistoricDefs = GitHubAuditLogPolling_CL
+  | where TimeGenerated between (ago(starttime) .. ago(endtime))
+  | join kind=inner (GitHubFederated) on $left.repo_s == $right.Repo
+  | where action_s == "workflows.prepared_workflow_job"
+  | summarize HistoricCount=count() by job_workflow_ref_s, repo_s, ServicePrincipalId, ServicePrincipalName;
+  // Lookup for prepared_workflow_job in specific time range to get job_workflow_ref
+  GitHubAuditLogPolling_CL
+  | where TimeGenerated >= ago(endtime)
+  // Lookup if WatchList includes repo as Federated Credentials
+  | join kind=inner (GitHubFederated) on $left.repo_s == $right.Repo
+  | where action_s == "workflows.prepared_workflow_job"
+  | summarize by job_workflow_ref_s, repo_s, workflow_run_id_d, ServicePrincipalId, ServicePrincipalName
+  // Check if workflow was used in the past
+  | join kind= leftouter (HistoricDefs) on job_workflow_ref_s
+  | where job_workflow_ref_s !in (HistoricDefs)
+  // Lookup for workflows.completed_workflow_run to get started and completed time range and conclusion of workflow
+  | join kind=innerunique (
+      GitHubAuditLogPolling_CL
+      | where action_s == "workflows.completed_workflow_run"
+      | project workflow_run_id_d, name_s, actor_s, event_s, action_s, started_at_t, completed_at_t, conclusion_s
+      ) on $left.workflow_run_id_d == $right.workflow_run_id_d
+  // Check if Workflow has used Federated Credentials, experimantal approach to use timestamp because of missing alternate reference
+  | extend Organization = tostring(split(repo_s, "/")[0])
+  | extend Repository = tostring(split(repo_s, "/")[1])
+  | project WorkflowRunId = workflow_run_id_d, WorkflowName = name_s,Actor = actor_s, WorkflowRef = job_workflow_ref_s, Repository, Organization, WorkflowStartedTime = started_at_t, WorkflowCompletedTime = completed_at_t, WorkflowConslusion = conclusion_s, ServicePrincipalId, ServicePrincipalName, HistoricCount
+  | extend ServicePrincipalId = tostring(ServicePrincipalId)
+  // Optional: Enrich all sign-in events in time window to the workflow run
+  | join kind=inner (
+      AADServicePrincipalSignInLogs
+          | project AADSignInTime = TimeGenerated, AADCorrelationId = CorrelationId, IPAddress, ServicePrincipalResource = ResourceDisplayName, Location, ServicePrincipalId, ServicePrincipalCredentialKeyId
+          | where ServicePrincipalCredentialKeyId == "00000000-0000-0000-0000-000000000000"
+          ) on $left.ServicePrincipalId == $right.ServicePrincipalId
+  | where AADSignInTime between (todatetime(WorkflowStartedTime) .. todatetime(WorkflowCompletedTime))
+  | project AADSignInTime, WorkflowRunId, WorkflowName, AccountCustomEntity = Actor, WorkflowRef, Repository, Organization, WorkflowStartedTime, WorkflowCompletedTime, WorkflowConslusion, AADCorrelationId, Location, IPCustomEntity = IPAddress, ServicePrincipalResource, ServicePrincipalName, ServicePrincipalId, HistoricCount
+entityMappings:
+  - entityType: Account
+    fieldMappings:
+      - identifier: FullName
+        columnName: AccountCustomEntity
+  - entityType: IP
+    fieldMappings:
+      - identifier: Address
+        columnName: IPCustomEntity
+version: 1.0.0

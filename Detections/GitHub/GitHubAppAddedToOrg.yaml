@@ -1,0 +1,30 @@
+id: c098157d-9edd-41aa-8a11-f3b515eff098
+name: 'New GitHub App added to GitHub Enterprise organization'
+description: |
+  'GitHub Apps will be addedto extend your workflos and integration in GitHub Enterprise. An attacker could use a malicious extension to conduct malicious activity. This query looks for new GitHub Apps that are not from a configurable list of approved apps.'
+severity: High
+requiredDataConnectors: []
+queryFrequency: 4h
+queryPeriod: 4h
+triggerOperator: gt
+triggerThreshold: 0
+tactics:
+  - Persistence
+relevantTechniques:
+  - T1505
+query: |
+  let allowed_apps = dynamic(["Dependabot"]);
+  GitHubAuditLogPolling_CL
+  | where action_s =~ "integration_installation.repositories_added"
+  | extend appName = tostring(name_s)
+  | where appName !in (allowed_apps)
+  | extend organization = tostring(org_s)
+  | project-reorder TimeGenerated, actor_s, org_s, organization
+  | extend date_time = unixtime_milliseconds_todatetime(_timestamp_d)
+  | project TimeGenerated = date_time, AccountCustomEntity = actor_s, organization = org_s, appName , action = action_s
+entityMappings:
+  - entityType: Account
+    fieldMappings:
+      - identifier: FullName
+        columnName: AccountCustomEntity
+version: 1.0.0

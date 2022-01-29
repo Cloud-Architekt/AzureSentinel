@@ -1,0 +1,31 @@
+id: 0ad32398-a885-4133-acaa-acf999836080
+name: 'GitHub repository becomes public'
+description: |
+  'Detection to trigger alerts if visibility of existing repository will be changed from private to public.'
+severity: High
+requiredDataConnectors: []
+queryFrequency: 4h
+queryPeriod: 4h
+triggerOperator: gt
+triggerThreshold: 0
+tactics:
+  - Collection
+  - Persistence
+  - DefenseEvasion  
+relevantTechniques:
+  - T1213
+  - T1098
+  - T1562  
+query: |
+  GitHubAuditLogPolling_CL
+  | where visibility_s == "public" and previous_visibility_s == "private"
+  | extend date_time = unixtime_milliseconds_todatetime(_timestamp_d)
+  | extend organization = split(repo_s, "/")[0]
+  | extend repository = split(repo_s, "/")[1]
+  | project TimeGenerated = date_time, AccountCustomEntity = actor_s, organization, repository, action = action_s, visibility = visibility_s
+entityMappings:
+  - entityType: Account
+    fieldMappings:
+      - identifier: FullName
+        columnName: AccountCustomEntity
+version: 1.0.0

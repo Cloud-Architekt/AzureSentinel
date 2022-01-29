@@ -1,0 +1,34 @@
+id: 065fd4ed-cce3-4f79-87de-d2d61490303b
+name: 'Sensitive actions in GitHub repository with Azure AD Federated Credentials'
+description: |
+  'Detection on pre-defined sensitive actions in repository which are federated with Azure AD service principal'
+severity: High
+requiredDataConnectors: []
+queryFrequency: 4h
+queryPeriod: 4h
+triggerOperator: gt
+triggerThreshold: 0
+tactics:
+  - Execution 
+  - DefenseEvasion
+relevantTechniques:
+  - T1578
+query: |
+  let GitHubFederated = _GetWatchlist('GitHubFederatedCredentials');
+  let SensitiveActions =  dynamic (["repo.add_member", "protected_branch.destroy", "protected_branch.update_pull_request_reviews_enforcement_level","protected_branch.policy_override"]);
+  let SensitivePermissionChange =  dynamic (["admin"]);
+  let SensitiveEnvAction = dynamic(["environment.remove_protection_rule", "environment.remove_actions_secret"]);
+  GitHubAuditLogPolling_CL
+  | extend repository = repo_s
+  | join kind=inner (GitHubFederated) on $left.repository == $right.Repo
+  | where action_s in (SensitiveActions) or new_repo_permission_s in (SensitivePermissionChange) or (action_s in (SensitiveEnvAction) and name_s == Environment)
+  | extend date_time = unixtime_milliseconds_todatetime(_timestamp_d)
+  | extend organization = split(repo_s, "/")[0]
+  | extend repository = split(repo_s, "/")[1]
+  | project TimeGenerated = date_time, AccountCustomEntity = actor_s, organization, repository, action = action_s, newRepoPermission = new_repo_permission_s
+entityMappings:
+  - entityType: Account
+    fieldMappings:
+      - identifier: FullName
+        columnName: AccountCustomEntity
+version: 1.0.0

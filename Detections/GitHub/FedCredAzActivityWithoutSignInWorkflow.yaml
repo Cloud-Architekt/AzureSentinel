@@ -1,0 +1,61 @@
+id: IN WORK1
+name: ' Azure Activity with Federated Credentials outside of GitHub Workflow activity'
+description: |
+  'Service Principal with Federated Credentials has been used for Azure Management but no GitHub workflow or sign-in event was audited in the activity time window.'
+severity: Medium
+requiredDataConnectors: []
+queryFrequency: 14d
+queryPeriod: 4h
+triggerOperator: gt
+triggerThreshold: 0
+tactics:
+  - Persistence
+  - Impact
+relevantTechniques:
+  - T1098
+  - T1496
+query: |
+  // Workflow runs and sign-ins from GitHub
+  let GitHubFederated = _GetWatchlist('GitHubFederatedCredentials') | where ServicePrincipalName != "AzOps";
+  let GitHubEvents = GitHubFederated
+  | extend ServicePrincipalId = tostring(ServicePrincipalId)
+  | extend GitHubOrganization = tostring(split(Repo, "/")[0])
+  | extend GitHubRepository = tostring(split(Repo, "/")[1])
+  | extend FedCredSubjectIdentifier = SubjectIdentifier
+  | join kind=inner (
+  AADServicePrincipalSignInLogs
+  | where ServicePrincipalCredentialKeyId == "00000000-0000-0000-0000-000000000000"
+  )on $left.ServicePrincipalId == $right.ServicePrincipalId
+  | project AADSignInTime = TimeGenerated, AADCorrelationId = CorrelationId, IPAddress, ServicePrincipalResource = ResourceDisplayName, AADSignInLocation = Location, ServicePrincipalId, ServicePrincipalCredentialKeyId, AADSignInResult = ResultType, AADTokenId = UniqueTokenIdentifier, FedCredSubjectIdentifier = SubjectIdentifier, GitHubRepoName = Repo
+  | extend GitHubOrganization = tostring(split(GitHubRepoName, "/")[0])
+  | extend GitHubRepository = tostring(split(GitHubRepoName, "/")[1])
+  | join kind=inner (
+      GitHubAuditLogPolling_CL
+      | where action_s == "workflows.completed_workflow_run"
+      | project GitHubRepoName = repo_s, WorkflowRunId = workflow_run_id_d, WorkflowName = name_s, WorkflowActor = actor_s, WorkflowStartedTime = started_at_t, WorkflowCompletedTime = completed_at_t, WorkflowConslusion = conclusion_s
+      ) on $left.GitHubRepoName == $right.GitHubRepoName
+  | where AADSignInTime between (todatetime(WorkflowStartedTime) .. todatetime(WorkflowCompletedTime));
+  // Azure Activities from Federated Credentials 
+  GitHubFederated
+  | extend ServicePrincipalId = tostring(ServicePrincipalId)
+  | join kind=inner (
+  AzureActivity
+  | extend AzClaims = parse_json(Claims_d)
+  | extend AzObjProp = parse_json(Properties_d)
+  | extend AzResourceId = tostring(AzObjProp.entity)
+  | extend AzActivityResource = tostring(AzClaims.aud)
+  | project AzCorrelationId = CorrelationId, AzTimeStamp = TimeGenerated, AzIpAddress = CallerIpAddress, AzSpId = Caller, AzClaims = parse_json(Claims_d), AzObjProp = parse_json(Properties_d), AzResourceId = tostring(AzObjProp.entity), AzActivityResource = tostring(AzClaims.aud)
+  )on $left.ServicePrincipalId == $right.AzSpId
+  | join kind=leftouter GitHubEvents on $left.AzSpId == $right.ServicePrincipalId, $left.AzIpAddress == $right.IPAddress
+  | where isempty(WorkflowStartedTime) or AzTimeStamp !between (WorkflowStartedTime .. WorkflowCompletedTime)
+  | project AzResourceId, AzSpId, ServicePrincipalId, AzIpAddress, IPAddress, WorkflowStartedTime, WorkflowCompletedTime, AzTimeStamp
+entityMappings:
+  - entityType: Account
+    fieldMappings:
+      - identifier: FullName
+        columnName: AccountCustomEntity
+  - entityType: IP
+    fieldMappings:
+      - identifier: Address
+        columnName: IPCustomEntity
+version: 1.0.0

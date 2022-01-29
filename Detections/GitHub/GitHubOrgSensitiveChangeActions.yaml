@@ -1,0 +1,31 @@
+id: 5b5a7809-bf88-4359-8d22-9bbd428c90e1
+name: 'Sensitive changes and activities in GitHub organization'
+description: |
+  'Detection on pre-defined sensitive actions on organization-level in GitHub Enterprise'
+severity: High
+requiredDataConnectors: []
+queryFrequency: 4h
+queryPeriod: 4h
+triggerOperator: gt
+triggerThreshold: 0
+tactics:
+  - Execution 
+  - DefenseEvasion
+relevantTechniques:
+  - T1578
+query: |
+  let SensitiveActions =  dynamic (["org.disable_two_factor_requirement", "org.enable_member_team_creation_permissio", "org.oauth_app_access_approved","members_can_delete_repos.disable","org.update_default_repository_permission","organization_domain.create","oauth_application.create","	integration_installation.repositories_added","org.disable_oauth_app_restrictions","org.update_actions_settings","org.create_actions_secret","dependency_graph.disable","dependabot_security_updates_new_repos.disable","org.update_actions_settings"]);
+  // Add GitHub user names to Authorized Bypassers to ignore policy bypasses by certain authorized users
+  let AuthorizedOrgOwner = dynamic(['GitHub1', 'GitHub2']);
+  GitHubAuditLogPolling_CL
+  | extend repository = repo_s
+  | where action_s in (SensitiveActions)
+  | where actor_s !in (AuthorizedOrgOwner)
+  | extend date_time = unixtime_milliseconds_todatetime(_timestamp_d)
+  | project TimeGenerated = date_time, AccountCustomEntity = actor_s, organization = org_s, action = action_s
+entityMappings:
+  - entityType: Account
+    fieldMappings:
+      - identifier: FullName
+        columnName: AccountCustomEntity
+version: 1.0.0

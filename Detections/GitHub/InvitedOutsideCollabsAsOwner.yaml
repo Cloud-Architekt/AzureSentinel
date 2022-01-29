@@ -1,0 +1,33 @@
+id: 9227adcb-e76e-46fa-8e67-a85ebda41fff
+name: 'Invited "outside collaborators" as owner to GitHub organization'
+description: |
+  'Owner of GitHub organization has invited outside collaborator with owner permission.'
+severity: High
+requiredDataConnectors: []
+queryFrequency: 4h
+queryPeriod: 4h
+triggerOperator: gt
+triggerThreshold: 0
+tactics:
+  - Persistence
+  - Persistence
+  - DefenseEvasion  
+relevantTechniques:
+  - T1098
+  - T1098
+  - T1562  
+query: |
+  GitHubAuditLogPolling_CL
+  | where action_s == "org.add_member" and permission_s == "admin"
+  | join kind=innerunique (
+      GitHubAuditLogPolling_CL
+      ) on $left.TimeGenerated == $right.TimeGenerated
+  | where action_s1 == "org.invite_member"
+  | extend date_time = unixtime_milliseconds_todatetime(_timestamp_d)
+  | project TimeGenerated = date_time, AccountCustomEntity = actor_s, organization = org_s, invitedUser = user_s, action = action_s
+entityMappings:
+  - entityType: Account
+    fieldMappings:
+      - identifier: FullName
+        columnName: AccountCustomEntity
+version: 1.0.0

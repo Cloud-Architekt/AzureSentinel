@@ -1,0 +1,55 @@
+id: 1134336d-4ed5-4599-9512-29cbbfc4770f
+name: 'GitHub Federated Credentials created for unknown entity or repository outside of organization'
+description: |
+  'Audit Event of added Federated Credentials (SubjectIdentifier) will be correlated to GitHub Audit to filter repository which aren't exist in GitHub organization.'
+severity: High
+requiredDataConnectors: []
+queryFrequency: 1d
+queryPeriod: 1d
+triggerOperator: gt
+triggerThreshold: 0
+tactics:
+  - DefenseEvasion
+relevantTechniques:
+  - T1550.001
+query: |
+ AuditLogs
+  | where OperationName has_any ("Update application")
+  | where Result =~ "success"
+  | where tostring(InitiatedBy.user.userPrincipalName) has "@" or tostring(InitiatedBy.app.displayName) has "@"
+  | extend initiatedByUPN = tostring(InitiatedBy.user.userPrincipalName)
+  | extend initiatedByIP = tostring(InitiatedBy.user.ipAddress)
+  | extend targetDisplayName = tostring(TargetResources[0].displayName)
+  | extend targetId = tostring(TargetResources[0].id)
+  | extend targetType = tostring(TargetResources[0].type)
+  | extend keyEvents = TargetResources[0].modifiedProperties
+  | mv-expand keyEvents
+  | where keyEvents.displayName =~ "FederatedIdentityCredentials"
+  | extend new_value_set = parse_json(tostring(keyEvents.newValue))
+  | extend old_value_set = parse_json(tostring(keyEvents.oldValue))
+  | mv-expand new_value_set
+  | extend issuer = tostring(new_value_set.Issuer)
+  | where issuer == "https://token.actions.githubusercontent.com"
+  | extend subject = tostring(new_value_set.Subject)
+  | extend federatedCredentialName = tostring(new_value_set.Name)
+  | extend repoPath = tostring(split(subject, ":")[1])
+  | extend organization = split(repoPath, "/")[0]
+  | extend repository = split(repoPath, "/")[1]
+  | extend entityType = split(subject, ":")[2]
+  | extend entityValue = split(subject, ":")[3]
+  | join kind= leftouter (
+      GitHubAuditLogPolling_CL
+      | summarize arg_max(TimeGenerated, *) by repo_s
+  ) on $left.repoPath == $right.repo_s
+  | where repoPath != repo_s
+  | project TimeGenerated, AccountCustomEntity = initiatedByUPN, IPCustomEntity =  initiatedByIP, targetDisplayName, federatedCredentialName, targetType, organization, repository, entityType, entityValue
+entityMappings:
+  - entityType: Account
+    fieldMappings:
+      - identifier: FullName
+        columnName: AccountCustomEntity
+  - entityType: IP
+    fieldMappings:
+      - identifier: Address
+        columnName: IPCustomEntity
+version: 1.0.0
