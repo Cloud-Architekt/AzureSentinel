@@ -16,7 +16,7 @@ relevantTechniques:
   - T1496
 query: |
   // Workflow runs and sign-ins from GitHub
-  let GitHubFederated = _GetWatchlist('GitHubFederatedCredentials') | where ServicePrincipalName != "AzOps";
+  let GitHubFederated = _GetWatchlist('GitHubFederatedCredentials');
   let GitHubEvents = GitHubFederated
   | extend ServicePrincipalId = tostring(ServicePrincipalId)
   | extend GitHubOrganization = tostring(split(Repo, "/")[0])
