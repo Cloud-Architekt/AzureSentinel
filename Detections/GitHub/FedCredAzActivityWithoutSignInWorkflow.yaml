@@ -47,8 +47,10 @@ query: |
   | project AzCorrelationId = CorrelationId, AzTimeStamp = TimeGenerated, AzIpAddress = CallerIpAddress, AzSpId = Caller, AzClaims = parse_json(Claims_d), AzObjProp = parse_json(Properties_d), AzResourceId = tostring(AzObjProp.entity), AzActivityResource = tostring(AzClaims.aud)
   )on $left.ServicePrincipalId == $right.AzSpId
   | join kind=leftouter GitHubEvents on $left.AzSpId == $right.ServicePrincipalId, $left.AzIpAddress == $right.IPAddress
-  | where isempty(WorkflowStartedTime) or AzTimeStamp !between (WorkflowStartedTime .. WorkflowCompletedTime)
-  | project AzResourceId, AzSpId, ServicePrincipalId, AzIpAddress, IPAddress, WorkflowStartedTime, WorkflowCompletedTime, AzTimeStamp
+  | where isempty(WorkflowStartedTime) or AzTimeStamp !between (WorkflowStartedTime .. WorkflowCompletedTime)  
+  | project AzResourceId, AzSpId, ServicePrincipalId, ServicePrincipalName, AzIpAddress, IPAddress, WorkflowStartedTime, WorkflowCompletedTime, AzTimeStamp
+  | extend timestamp = AzTimeStamp, AccountCustomEntity = ServicePrincipalName, IPCustomEntity = AzIpAddress
+
 entityMappings:
   - entityType: Account
     fieldMappings:
@@ -58,4 +60,8 @@ entityMappings:
     fieldMappings:
       - identifier: Address
         columnName: IPCustomEntity
+  - entityType: AzureResource
+    fieldMappings:
+      - identifier: ResourceId
+        columnName: AzResourceId        
 version: 1.0.0
