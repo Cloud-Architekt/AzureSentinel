@@ -1,8 +1,8 @@
 id: c098157d-9edd-41aa-8a11-f3b515eff098
 name: 'New GitHub App added to GitHub Enterprise organization'
 description: |
-  'GitHub Apps will be addedto extend your workflos and integration in GitHub Enterprise. An attacker could use a malicious extension to conduct malicious activity. This query looks for new GitHub Apps that are not from a configurable list of approved apps.'
-severity: High
+  'GitHub Apps will be added to extend your workflos and integration in GitHub Enterprise. An attacker could use a malicious extension to conduct malicious activity. This query looks for new GitHub Apps that are not from a configurable list of approved apps.'
+severity: Medium
 requiredDataConnectors: []
 queryFrequency: 4h
 queryPeriod: 4h
