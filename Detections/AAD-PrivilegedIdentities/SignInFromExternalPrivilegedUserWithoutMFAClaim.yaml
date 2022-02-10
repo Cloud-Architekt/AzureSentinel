@@ -21,7 +21,8 @@ relevantTechniques:
 query: |
   let adminAccountPreffix = 'adm';
   union AADNonInteractiveUserSignInLogs, SigninLogs
-  | where ResultType == "0" and UserPrincipalName startswith adminAccountPreffix | where Status !contains "MFA requirement satisfied by claim in the token"
+  | where ResultType == "0" and UserPrincipalName startswith adminAccountPreffix
+  | where Status_string !contains "MFA requirement satisfied by claim in the token"
   | project timestamp = TimeGenerated, AccountCustomEntity = UserPrincipalName, IPCustomEntity = IPAddress
 entityMappings:
   - entityType: Account
