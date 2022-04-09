@@ -1,7 +1,7 @@
 id: 54ed43b6-b503-4b1a-ab83-42812f7b794a
-name: Sensitive Azure RBAC change on Management Group level
+name: Sensitive Azure RBAC added on Management Group level
 description: |
-  'Identifies when a sensitive Azure RBAC role is added or removed on Management Group-Level and shows actor as entity in the incident.'
+  'Identifies when a sensitive Azure RBAC role is granted on Management Group-Level and shows actor as entity in the incident.'
 severity: Medium
 queryFrequency: 4h
 queryPeriod: 4h
@@ -33,7 +33,7 @@ entityMappings:
   - entityType: Account
     fieldMappings:
       - identifier: FullName
-        columnName: AccountDisplayName
+        columnName: AccountUpn
       - identifier: AadUserId
         columnName: AccountObjectId
   - entityType: IP
