@@ -1,0 +1,46 @@
+id: 54ed43b6-b503-4b1a-ab83-42812f7b794a
+name: Sensitive Azure RBAC change on Management Group level
+description: |
+  'Identifies when a sensitive Azure RBAC role is added or removed on Management Group-Level and shows actor as entity in the incident.'
+severity: Medium
+queryFrequency: 4h
+queryPeriod: 4h
+triggerOperator: gt
+triggerThreshold: 0
+tactics:
+  - InitialAccess
+  - CredentialAccess
+relevantTechniques:
+  - T1078
+  - T1110
+query: |
+  let SensitiveRoles = dynamic(['Owner', 'User Access Administrator']);
+
+  CloudAppEvents
+  | where Application == 'Microsoft Azure' and ObjectId contains "/providers/Microsoft.Management"
+  | extend authorization = parse_json(tostring(parse_json(tostring(RawEventData.authorization))))
+  | where authorization.action == "Microsoft.Authorization/roleAssignments/write"
+  | extend AzureActivityId = parse_json(tostring(RawEventData)).ActivityId
+  | extend ClientIPAddress = parse_json(tostring(RawEventData.httpRequest)).clientIpAddress
+  | extend RoleAssignment = parse_json(tostring(parse_json(tostring(RawEventData.authorization)).evidence))
+  | extend AccountUpn = parse_json(tostring(RawEventData.claims)).["http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name"]
+  // Trigger alert if only sensitive role has been assigned
+  | extend RoleName = parse_json(tostring(RoleAssignment)).role
+  | extend RoleScope = parse_json(tostring(RoleAssignment)).roleAssignmentScope
+  | where RoleName in (SensitiveRoles)
+  | project TimeGenerated, ActionType, AccountUpn,  AccountDisplayName, AccountObjectId, ClientIPAddress, RoleName, RoleScope, RoleAssignment
+entityMappings:
+  - entityType: Account
+    fieldMappings:
+      - identifier: FullName
+        columnName: AccountDisplayName
+      - identifier: AadUserId
+        columnName: AccountObjectId
+  - entityType: IP
+    fieldMappings:        
+      - identifier: Address
+        columnName: ClientIPAddress
+  - entityType: AzureResource        
+      - identifier: ResourceId
+        columnName: RoleScope        
+version: 1.1.0
