@@ -1,0 +1,36 @@
+id: 185fd95d-19b1-4494-bd6f-f2695a280f2f
+name: Elevated Access management for Azure resources by Global Admin
+description: |
+  'Azure AD and Azure resources are secured independently from one another. That is, Azure AD role assignments do not grant access to Azure resources, and Azure role assignments do not grant access to Azure AD. However, if you are a Global Administrator in Azure AD, you can assign yourself access to all Azure subscriptions and management groups in your directory.'
+severity: Medium
+queryFrequency: 4h
+queryPeriod: 4h
+triggerOperator: gt
+triggerThreshold: 0
+tactics:
+  - PrivilegeEscalation
+relevantTechniques:
+  - T1078
+  - T1110
+query: |
+  CloudAppEvents
+  | where ApplicationId == '12260'and Application == 'Microsoft Azure'
+  | where parse_json(tostring(parse_json(tostring(RawEventData.authorization)).evidence)).roleDefinitionId == "b21f0835cd464e508cf8e297ff563cb1"
+  | where RawEventData.operationName == "Microsoft.Authorization/elevateAccess/action"
+  | where parse_json(tostring(parse_json(tostring(RawEventData.authorization)).evidence)).roleAssignmentScope == "/"
+  | where parse_json(tostring(parse_json(tostring(RawEventData.authorization)).evidence)).roleAssignmentId == "b507cd211c194747a82e1c2e8584c6da"
+  | extend ClientIPAddress = parse_json(tostring(RawEventData.httpRequest)).clientIpAddress
+  | extend RoleAssignmentScope = parse_json(tostring(parse_json(tostring(RawEventData.authorization)).evidence)).roleAssignmentScope
+  | extend RoleAssignmentId = parse_json(tostring(parse_json(tostring(RawEventData.authorization)).evidence)).roleAssignmentId
+entityMappings:
+  - entityType: Account
+    fieldMappings:
+      - identifier: FullName
+        columnName: AccountDisplayName
+      - identifier: AadUserId
+        columnName: AccountObjectId
+  - entityType: IP
+    fieldMappings:        
+      - identifier: Address
+        columnName: IPAddress    
+version: 1.0.0
