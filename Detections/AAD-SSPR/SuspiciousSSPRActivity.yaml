@@ -1,7 +1,7 @@
 id: b23d4f94-39e8-4796-8759-42373c3697bd
 name: Suspicious activity from unknown or risky IP addresses to Azure AD SSPR
 description: |
-  'Identifies unknown or risky IPs from which users attempts to reset their passwords (by Azure AD SSPR).'
+  'Identifies IPs from which the user did not log on without a sign in risk in the last 14 days but now attempts to reset their password from (by Azure AD SSPR).'
 severity: Medium
 requiredDataConnectors:
   - connectorId: AzureActivity
@@ -24,17 +24,18 @@ relevantTechniques:
   - T1078
   - T1110
 query: |
-  let timeRange = 1d;
+  let SignInLookback = 14d;
+  let SSPRLookback = 1d;
   let maxTimeBetweenSSPRandSigninInMinutes=7*24*60; // per Default max. difference is set to 7 Days
   AuditLogs
-  | where TimeGenerated >= ago(timeRange) 
+  | where TimeGenerated >= ago(SSPRLookback) 
   | where LoggedByService == "Self-service Password Management" and ResultDescription == "User submitted their user ID"
   | extend AccountType = tostring(TargetResources[0].type), UserPrincipalName = tostring(TargetResources[0].userPrincipalName),
     TargetResourceName = tolower(tostring(TargetResources[0].displayName)), SSPRSourceIP = tostring(InitiatedBy.user.ipAddress)
   | project UserPrincipalName, SSPRSourceIP, SSPRAttemptTime = TimeGenerated, CorrelationId
   | join kind= leftouter (
       union AADNonInteractiveUserSignInLogs, SigninLogs
-      | where datetime_add('minute',maxTimeBetweenSSPRandSigninInMinutes,TimeGenerated) >= ago(timeRange)
+      | where datetime_add('minute',maxTimeBetweenSSPRandSigninInMinutes,TimeGenerated) >= ago(SignInLookback)
       | where ResultType == "0"
       | where RiskLevelAggregated == "none" or RiskLevelDuringSignIn == "none"
       | extend TrustedIP = tostring(IPAddress)
