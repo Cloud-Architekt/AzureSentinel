@@ -15,7 +15,6 @@ relevantTechniques:
   - T1110
 query: |
   let SensitiveRoles = dynamic(['Owner', 'User Access Administrator']);
-
   CloudAppEvents
   | where Application == 'Microsoft Azure' and ObjectId contains "/providers/Microsoft.Management"
   | extend authorization = parse_json(tostring(parse_json(tostring(RawEventData.authorization))))
@@ -43,4 +42,4 @@ entityMappings:
   - entityType: AzureResource        
       - identifier: ResourceId
         columnName: RoleScope        
-version: 1.1.0
+version: 1.2.0
