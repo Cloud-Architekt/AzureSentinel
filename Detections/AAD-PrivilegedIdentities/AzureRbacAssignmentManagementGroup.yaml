@@ -36,10 +36,11 @@ entityMappings:
       - identifier: AadUserId
         columnName: AccountObjectId
   - entityType: IP
-    fieldMappings:        
+    fieldMappings:
       - identifier: Address
         columnName: ClientIPAddress
-  - entityType: AzureResource        
+  - entityType: AzureResource
+    fieldMappings:
       - identifier: ResourceId
-        columnName: RoleScope        
+        columnName: RoleScope
 version: 1.2.0
