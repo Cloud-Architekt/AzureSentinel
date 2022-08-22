@@ -29,7 +29,7 @@ query: |
   | extend TargetAccountObjectId = tostring(parse_json(tostring(TargetResources[0])).id)
   | where ActorAccountObjectId in (AADConnectorAcc)
   | join kind=leftouter (IdentityInfo | project AccountObjectId, AccountDisplayName, GroupMembership, AssignedRoles) on $left.TargetAccountObjectId == $right.AccountObjectId
-  | project TimeGenerated, ActorAccountObjectId, TargetAccountObjectId, OperationName, TargetUPN = tostring(parse_json(tostring(TargetResources[0])).userPrincipalName), GroupMembership, AssignedRoles
+  | project TimeGenerated, ActorAccountObjectId, TargetAccountObjectId, OperationName, TargetUPN = tostring(parse_json(tostring(TargetResources[0])).userPrincipalName), GroupMembership, AssignedRoles, ActorAccountIPAddress
   | extend timestamp = TimeGenerated, IPCustomEntity = ActorAccountIPAddress, AccountCustomEntity = TargetUPN
 entityMappings:
   - entityType: Account
