@@ -1,5 +1,5 @@
 id: dfe51b81-efb9-45bd-abbc-ee8ee34d15b1
-name: Unusual Azure AD Conditional Access Failures 
+name: Unusual Azure AD Conditional Access Failures after Policy Change
 description: |
   'Uses Behaviour Analytics (UEBA) information in Microsoft Sentinel and correlates unusual numbers of Conditional Access failures with sign-in logs. The result will be used for correlation to detect CA policy changes in AuditLogs within the time range.'
 severity: Medium
