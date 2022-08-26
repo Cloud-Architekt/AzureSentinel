@@ -1,0 +1,30 @@
+id: 9899789c-2f82-4560-9539-90396c264f3a
+name: Suspicious assignment of (classic) administrator roles
+description: |
+  'Detection of writing authorization information as part of Azure classic administrator roles (ASM).'
+severity: Medium
+requiredDataConnectors:
+  - connectorId: AzureActivity
+    dataTypes:
+      - AzureActivity
+queryFrequency: 1d
+queryPeriod: 1d
+triggerOperator: gt
+triggerThreshold: 0
+tactics:
+  - Persistence
+  - PrivilegeEscalation
+relevantTechniques:
+  - T1098
+query: |
+  let timeRange = 1d;
+  let szOperationNames = dynamic(["MICROSOFT.AUTHORIZATION/CLASSICADMINISTRATORS/WRITE", "MICROSOFT.AUTHORIZATION/CLASSICADMINISTRATORS/DELETE"]);
+  AzureActivity
+  | where OperationNameValue in~ (szOperationNames) and ActivityStatusValue == "Success"
+  | project timestamp = TimeGenerated, AccountCustomEntity = Caller, IPCustomEntity = CallerIpAddress
+entityMappings:
+  - entityType: IP
+    fieldMappings:
+      - identifier: Address
+        columnName: IPCustomEntity
+version: 1.0.0
