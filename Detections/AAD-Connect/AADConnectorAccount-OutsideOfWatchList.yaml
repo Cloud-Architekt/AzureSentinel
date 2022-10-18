@@ -13,11 +13,9 @@ queryPeriod: 1d
 triggerOperator: gt
 triggerThreshold: 0
 tactics:
-  - CredentialAccess
-  - DefenseEvasion
+  - Persistence
 relevantTechniques:
-  - T1528
-  - T1550
+  - T1098
 query: |
   let DirSyncRoleAssignedMembers = (IdentityInfo 
   | where AssignedRoles contains "Directory Synchronization Accounts" 

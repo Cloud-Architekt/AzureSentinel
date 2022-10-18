@@ -17,10 +17,9 @@ triggerOperator: gt
 triggerThreshold: 0
 tactics:
   - CredentialAccess
-  - InitialAccess
 relevantTechniques:
-  - T1110
-  - T1078
+  - T1552
+  - T1528
 query: |
   let AADCServer = (_GetWatchlist('HighValueAssets')
       | where ['Tags'] == "Azure AD Connect" | project ['IP Address']);
