@@ -13,9 +13,14 @@ queryPeriod: 1d
 triggerOperator: gt
 triggerThreshold: 0
 tactics:
+  - Persistence
+  - CredentialAccess
   - PrivilegeEscalation
+  - InitialAccess
 relevantTechniques:
-  - T1548
+  - T1136
+  - T1098
+  - T1078
 query: |
   AuditLogs
   | where OperationName has "Set DirSync feature" 

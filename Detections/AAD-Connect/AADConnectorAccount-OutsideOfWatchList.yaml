@@ -14,8 +14,12 @@ triggerOperator: gt
 triggerThreshold: 0
 tactics:
   - Persistence
+  - CredentialAccess
+  - PrivilegeEscalation
+  - InitialAccess
 relevantTechniques:
   - T1098
+  - T1078
 query: |
   let DirSyncRoleAssignedMembers = (IdentityInfo 
   | where AssignedRoles contains "Directory Synchronization Accounts" 
