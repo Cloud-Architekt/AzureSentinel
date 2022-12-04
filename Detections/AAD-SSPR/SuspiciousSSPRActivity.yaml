@@ -4,9 +4,6 @@ description: |
   'Identifies IPs from which the user did not log on without a sign in risk in the last 14 days but now attempts to reset their password from (by Azure AD SSPR).'
 severity: Medium
 requiredDataConnectors:
-  - connectorId: AzureActivity
-    dataTypes:
-      - AzureActivity
   - connectorId: AzureActiveDirectory
     dataTypes:
       - SigninLogs
