@@ -44,7 +44,7 @@ query: |
   ) on ConditionalAccessId
   | extend Actor = parse_json(tostring(InitiatedBy.user)).userPrincipalName
   | project TimeGenerated, OperationName, Actor, ConditionalAccessName, CorrelationId, ResultType, count_
-  | extend AccountCustomEntity = UserPrincipalName
+  | extend AccountCustomEntity = Actor
 entityMappings:
   - entityType: Account
     fieldMappings:
