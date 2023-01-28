@@ -4,8 +4,8 @@ description: |
   'Service Principal with Federated Credentials has been used for Azure Management but no GitHub workflow or sign-in event was audited in the activity time window.'
 severity: Medium
 requiredDataConnectors: []
-queryFrequency: 14d
-queryPeriod: 4h
+queryFrequency: 4h
+queryPeriod: 14d
 triggerOperator: gt
 triggerThreshold: 0
 tactics:
