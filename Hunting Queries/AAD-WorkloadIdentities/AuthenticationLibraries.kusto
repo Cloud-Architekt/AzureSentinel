@@ -1,0 +1,26 @@
+let SupportedAuthLib = datatable(SupportedAuthLibName:string, SupportedAuthLibVersion:string) [
+    "MSAL.NET", "4.49.1",
+    "MSAL.Python", "1.30.0"
+];
+AADServicePrincipalSignInLogs
+| where TimeGenerated >ago(90d)
+| extend ClientAuth = parse_json(AuthenticationProcessingDetails)[0].key
+| extend ClientAuthDetails = tostring(parse_json(AuthenticationProcessingDetails)[0].value)
+| extend AuthLibFamily = iff(isnotempty(ClientAuthDetails), extract("Family: (.*) Library", 1, ClientAuthDetails), "Unknown")
+| extend AuthLibProduct = iff(isnotempty(ClientAuthDetails), extract("Library: (.*) Platform", 1, ClientAuthDetails), "Unknown")
+| extend AuthLibProductName = iff(isnotempty(ClientAuthDetails), replace(" [0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+", "", AuthLibProduct), "Unknown")
+| extend AuthLibProductVersion = iff(isnotempty(ClientAuthDetails), extract(".* ([0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+)", 1, AuthLibProduct), "Unknown")
+// Enforce Semantic Versioning between MSAL products (MSAL.Python and MSAL.NET)
+| extend AuthLibProductName = iff(AuthLibProductName matches regex " ([0-9]+\\.[0-9]+\\.[0-9])", replace(" ([0-9]+\\.[0-9]+\\.[0-9])", "", AuthLibProduct), AuthLibProductName)
+| extend AuthLibProductVersion = iff(AuthLibProduct matches regex ".* ([0-9]+\\.[0-9]+\\.[0-9])", extract(".* ([0-9]+\\.[0-9]+\\.[0-9])", 1, AuthLibProduct), AuthLibProductVersion)
+| extend AuthLibPlatform = iff(isnotempty(ClientAuthDetails), extract("Platform:(.*)", 1, ClientAuthDetails), "Unknown")
+| distinct AuthLibFamily, AuthLibProductName, AuthLibProductVersion, AuthLibPlatform, ClientAuthDetails, AppId
+// Correlate with supported Libraries
+| join kind=leftouter SupportedAuthLib on $left.AuthLibProductName == $right.SupportedAuthLibName
+// Check if Library Name is listed in SupportedAuthLib
+| extend AuthLibraryStatus = iif((AuthLibProductName == SupportedAuthLibName), "Supported", "Unsupported")
+// Check if Library Version is listed in SupportedAuthLib
+| extend AuthLibraryVersionStatus = iff(AuthLibProductVersion != "Unknown", iif(parse_version(AuthLibProductVersion) >= parse_version(SupportedAuthLibVersion), "Up-to-date", "Outdated"), "Unknown")
+| project AuthLibProductName, AuthLibProductVersion, SupportedAuthLibVersion, AuthLibraryStatus, AuthLibraryVersionStatus
+| summarize count() by AuthLibraryVersionStatus
+| render piechart

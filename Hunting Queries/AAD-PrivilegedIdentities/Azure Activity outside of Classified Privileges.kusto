@@ -1,0 +1,22 @@
+let PrivilegedUser = AADPrivilegedEAM_CL
+    | extend UPN = ObjectUserPrincipalName_s
+    | extend Classification = parse_json(Classification_s)
+    | mv-expand Classification
+    | distinct ObjectId_g;
+let ExcludeCaller = dynamic(['Microsoft.Advisor', '7d7f4952-4ce0-47b6-aba1-d005229e32ad', '3ce7a1a1-c396-4bc3-b218-d0fa71e4dfa1']);
+let ExcludeRole = dynamic(['Security RP Service Role', 'Azure Guest Configuration S2S Service Role', 'Access NRP Service Role and HCRP', 'Microsoft Operational Insight Service Role', 'Application Insights NRT Service Role']);
+AzureActivity
+| where Caller !in~ (PrivilegedUser)
+| where Caller !in~ (ExcludeCaller)
+// Check ObjectId from Claims audit, Caller could have empty value
+| extend ClaimsObjectIdentifier = parse_json(Claims).["http://schemas.microsoft.com/identity/claims/objectidentifier"] 
+| where ClaimsObjectIdentifier !in (PrivilegedUser) and ClaimsObjectIdentifier != ""
+// Filter entries without Caller
+| where parse_json(Properties).eventCategory != "ResourceHealth"
+| extend parsedClaims = parse_json(Claims_d)
+| extend AuthZ = parse_json(Authorization)
+| where parse_json(tostring(AuthZ.evidence)).role !in~ (ExcludeRole)
+| extend AuthZrole = parse_json(tostring(AuthZ.evidence)).role
+| project TimeGenerated, Caller, AuthZrole, _ResourceId
+| extend Account_0_ObjectGuid = Caller
+| extend AzureResource_0_ResourceId = _ResourceId
