@@ -1,0 +1,42 @@
+  // Owner added to high privileged application by unprivileged or lower privileged user
+  let SensitiveMsGraphPermissions = externaldata(EAMTierLevel: string, Category: string, APIPermission: string)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_MsGraphPermissions.json"] with(format='multijson');
+  let SensitiveAadDirectoryRoles = externaldata(EAMTierLevel: string, Category: string, id: string)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_AadDirectoryRoles.json"] with(format='multijson');
+  AuditLogs
+  | where OperationName in ("Add owner to application","Add owner to service principal")
+  | extend InitiatingUserOrApp = iff(isnotempty(InitiatedBy.user.userPrincipalName),tostring(InitiatedBy.user.userPrincipalName), tostring(InitiatedBy.app.displayName))
+  | extend InitiatingUserOrAppId = iff(isnotempty(InitiatedBy.user.id),tostring(InitiatedBy.user.id), tostring(InitiatedBy.app.id))
+  | extend InitiatingIpAddress = iff(isnotempty(InitiatedBy.user.ipAddress), tostring(InitiatedBy.user.ipAddress), tostring(InitiatedBy.app.ipAddress))
+  | mv-expand TargetResources
+  | mv-expand TargetResources.modifiedProperties | where TargetResources_modifiedProperties.displayName == "Application.ObjectID" | extend ApplicationObjectID = replace_string(tostring(TargetResources_modifiedProperties.newValue),'"','')
+  | mv-expand TargetResources.modifiedProperties | where TargetResources_modifiedProperties.displayName == "Application.DisplayName" | extend ApplicationDisplayName = replace_string(tostring(TargetResources_modifiedProperties.newValue),'"','')
+  | mv-expand TargetResources.modifiedProperties | where TargetResources_modifiedProperties.displayName == "Application.AppId" | extend ApplicationAppId = replace_string(tostring(TargetResources_modifiedProperties.newValue),'"','')
+  | join kind=inner(
+    AADServicePrincipals_CL
+    | mv-expand parse_json(APP_s), parse_json(SPAppRoleAssignments_s)
+    | mv-expand SPAppRoleAssignments_s.AppRolePermissionSensitivity, SPAppRoleAssignments_s.AppRolePermission, parse_json(SPAADRoleAssignments_s)
+    | mv-expand SPAADRoleAssignments_s.roleDefinitionName, SPAADRoleAssignments_s.roleDefinitionId
+    | extend AppRolePermission = tostring(SPAppRoleAssignments_s_AppRolePermission)
+    | extend AadDirectoryRoleId = tostring(SPAADRoleAssignments_s_roleDefinitionId)
+    | extend AadDirectoryRoleName = tostring(SPAADRoleAssignments_s_roleDefinitionName)
+    // Option A: Filter on classification from AadSpInsights
+    //| where SPAADRoleAssignments_s_roleDefinitionId == true or SPAppRoleAssignments_s_AppRolePermissionSensitivity == "critical"
+    // Option B: Filter on enrichment from external classification schema
+    | join kind=leftouter(
+        SensitiveMsGraphPermissions | project AppRolePermissionTierLevel = EAMTierLevel, AppRolePermissionCategory = Category, APIPermission
+        ) on $left.AppRolePermission == $right.APIPermission
+    | join kind=leftouter(
+        SensitiveAadDirectoryRoles | project AadDirectoryRoleTierLevel = EAMTierLevel, AadDirectoryRoleTierCategory = Category, id
+        ) on $left.AadDirectoryRoleId == $right.id
+    | extend AppClassification = iif((AppRolePermissionTierLevel == "ControlPlane" or AadDirectoryRoleTierLevel == "ControlPlane"), "ControlPlane", "NonControlPlane")
+    | where AppClassification == "ControlPlane"
+    | project APPObjectId = tostring(parse_json(APP_s).APPObjectId), APPDisplayName = tostring(parse_json(APP_s).APPDisplayName), ObjectId_g, ObjectType_s, AppRolePermission, AadDirectoryRoleName, AppClassification, AppRolePermissionCategory, AadDirectoryRoleTierCategory, tostring(parse_json(APP_s).APPSignInAudience)
+    | distinct APPObjectId, APPDisplayName, ObjectId_g, ObjectType_s, AppClassification
+    ) on $left.ApplicationObjectID == $right.APPObjectId  
+  | join kind=inner (
+    AADPrivilegedEAM_CL
+        | where TimeGenerated > ago(14d)
+        | summarize arg_max(TimeGenerated, *) by ObjectId_g
+        | project ObjectId_g, AdminTierLevel_s, AdminTierLevelName_s, InitiatingUserOrAppClassification = parse_json(Classification_s)
+    ) on $left.InitiatingUserOrAppId == $right.ObjectId_g
+| where parse_json(tostring(parse_json(InitiatingUserOrAppClassification))) contains AppClassification
+| project-reorder OperationName, ApplicationObjectID, ApplicationDisplayName, ApplicationAppId, InitiatingUserOrApp, InitiatingUserOrAppId, InitiatingIpAddress, InitiatingUserOrAppClassification
