@@ -14,13 +14,14 @@ AADServicePrincipalSignInLogs
 | extend AuthLibProductName = iff(AuthLibProductName matches regex " ([0-9]+\\.[0-9]+\\.[0-9])", replace(" ([0-9]+\\.[0-9]+\\.[0-9])", "", AuthLibProduct), AuthLibProductName)
 | extend AuthLibProductVersion = iff(AuthLibProduct matches regex ".* ([0-9]+\\.[0-9]+\\.[0-9])", extract(".* ([0-9]+\\.[0-9]+\\.[0-9])", 1, AuthLibProduct), AuthLibProductVersion)
 | extend AuthLibPlatform = iff(isnotempty(ClientAuthDetails), extract("Platform:(.*)", 1, ClientAuthDetails), "Unknown")
-| distinct AuthLibFamily, AuthLibProductName, AuthLibProductVersion, AuthLibPlatform, ClientAuthDetails, AppId
+| distinct AuthLibFamily, AuthLibProductName, AuthLibProductVersion, AuthLibPlatform, ClientAuthDetails, AppId, ServicePrincipalName, tostring(ClientAuth)
 // Correlate with supported Libraries
 | join kind=leftouter SupportedAuthLib on $left.AuthLibProductName == $right.SupportedAuthLibName
 // Check if Library Name is listed in SupportedAuthLib
 | extend AuthLibraryStatus = iif((AuthLibProductName == SupportedAuthLibName), "Supported", "Unsupported")
 // Check if Library Version is listed in SupportedAuthLib
 | extend AuthLibraryVersionStatus = iff(AuthLibProductVersion != "Unknown", iif(parse_version(AuthLibProductVersion) >= parse_version(SupportedAuthLibVersion), "Up-to-date", "Outdated"), "Unknown")
-| project AuthLibProductName, AuthLibProductVersion, SupportedAuthLibVersion, AuthLibraryStatus, AuthLibraryVersionStatus
-| summarize count() by AuthLibraryVersionStatus
-| render piechart
+| project ServicePrincipalName, AppId, AuthLibProductName, AuthLibProductVersion, SupportedAuthLibVersion, AuthLibraryStatus, AuthLibraryVersionStatus, tostring(ClientAuth)
+// Visualization of Authication Libraries
+//| summarize count() by AuthLibProductName
+//| render piechart
