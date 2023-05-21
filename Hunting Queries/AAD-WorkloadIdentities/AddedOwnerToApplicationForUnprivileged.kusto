@@ -2,6 +2,7 @@
   let SensitiveMsGraphPermissions = externaldata(EAMTierLevel: string, Category: string, APIPermission: string)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_MsGraphPermissions.json"] with(format='multijson');
   let SensitiveAadDirectoryRoles = externaldata(EAMTierLevel: string, Category: string, id: string)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_AadDirectoryRoles.json"] with(format='multijson');
   AuditLogs
+  | where TimeGenerated >ago(14d)
   | where OperationName in ("Add owner to application","Add owner to service principal")
   | extend InitiatingUserOrApp = iff(isnotempty(InitiatedBy.user.userPrincipalName),tostring(InitiatedBy.user.userPrincipalName), tostring(InitiatedBy.app.displayName))
   | extend InitiatingUserOrAppId = iff(isnotempty(InitiatedBy.user.id),tostring(InitiatedBy.user.id), tostring(InitiatedBy.app.id))
@@ -13,6 +14,7 @@
   | extend AddedOwnerId = tostring(TargetResources.id)
   | join kind=inner(
     AADServicePrincipals_CL
+    | where TimeGenerated >ago(14d)
     | mv-expand parse_json(APP_s), parse_json(SPAppRoleAssignments_s)
     | mv-expand SPAppRoleAssignments_s.AppRolePermissionSensitivity, SPAppRoleAssignments_s.AppRolePermission, parse_json(SPAADRoleAssignments_s)
     | mv-expand SPAADRoleAssignments_s.roleDefinitionName, SPAADRoleAssignments_s.roleDefinitionId
@@ -28,8 +30,7 @@
     | join kind=leftouter(
         SensitiveAadDirectoryRoles | project AadDirectoryRoleTierLevel = EAMTierLevel, AadDirectoryRoleTierCategory = Category, id
         ) on $left.AadDirectoryRoleId == $right.id
-    | extend AppClassification = iif((AppRolePermissionTierLevel == "ControlPlane" or AadDirectoryRoleTierLevel == "ControlPlane"), "ControlPlane", "NonControlPlane")
-    | where AppClassification == "ControlPlane"
+    | extend AppClassification = iif((AppRolePermissionTierLevel == "ControlPlane" or AadDirectoryRoleTierLevel == "ControlPlane"), "ControlPlane", "ManagementDataPlane")
     | project APPObjectId = tostring(parse_json(APP_s).APPObjectId), APPDisplayName = tostring(parse_json(APP_s).APPDisplayName), ObjectId_g, ObjectType_s, AppRolePermission, AadDirectoryRoleName, AppClassification, AppRolePermissionCategory, AadDirectoryRoleTierCategory, tostring(parse_json(APP_s).APPSignInAudience)
     | distinct APPObjectId, APPDisplayName, ObjectId_g, ObjectType_s, AppClassification
     ) on $left.ApplicationObjectID == $right.APPObjectId  
