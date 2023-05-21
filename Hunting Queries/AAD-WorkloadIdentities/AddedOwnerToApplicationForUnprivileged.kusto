@@ -14,7 +14,6 @@
   | extend AddedOwnerId = tostring(TargetResources.id)
   | join kind=inner(
     AADServicePrincipals_CL
-    | where TimeGenerated >ago(14d)
     | mv-expand parse_json(APP_s), parse_json(SPAppRoleAssignments_s)
     | mv-expand SPAppRoleAssignments_s.AppRolePermissionSensitivity, SPAppRoleAssignments_s.AppRolePermission, parse_json(SPAADRoleAssignments_s)
     | mv-expand SPAADRoleAssignments_s.roleDefinitionName, SPAADRoleAssignments_s.roleDefinitionId
