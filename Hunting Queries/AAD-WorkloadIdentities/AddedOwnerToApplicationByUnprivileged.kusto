@@ -27,8 +27,7 @@
     | join kind=leftouter(
         SensitiveAadDirectoryRoles | project AadDirectoryRoleTierLevel = EAMTierLevel, AadDirectoryRoleTierCategory = Category, id
         ) on $left.AadDirectoryRoleId == $right.id
-    | extend AppClassification = iif((AppRolePermissionTierLevel == "ControlPlane" or AadDirectoryRoleTierLevel == "ControlPlane"), "ControlPlane", "NonControlPlane")
-    | where AppClassification == "ControlPlane"
+    | extend AppClassification = iif((AppRolePermissionTierLevel == "ControlPlane" or AadDirectoryRoleTierLevel == "ControlPlane"), "ControlPlane", "ManagementDataPlane")
     | project APPObjectId = tostring(parse_json(APP_s).APPObjectId), APPDisplayName = tostring(parse_json(APP_s).APPDisplayName), ObjectId_g, ObjectType_s, AppRolePermission, AadDirectoryRoleName, AppClassification, AppRolePermissionCategory, AadDirectoryRoleTierCategory, tostring(parse_json(APP_s).APPSignInAudience)
     | distinct APPObjectId, APPDisplayName, ObjectId_g, ObjectType_s, AppClassification
     ) on $left.ApplicationObjectID == $right.APPObjectId  
@@ -39,5 +38,5 @@
         | extend InitiatingUserOrAppClassification = iff(isnotempty(parse_json(Classification_s)), parse_json(Classification_s), "UserAccess")
         | project ObjectId_g, AdminTierLevel_s, AdminTierLevelName_s, InitiatingUserOrAppClassification
     ) on $left.InitiatingUserOrAppId == $right.ObjectId_g
-| where parse_json(tostring(parse_json(InitiatingUserOrAppClassification))) contains AppClassification
-| project-reorder OperationName, ApplicationObjectID, ApplicationDisplayName, ApplicationAppId, InitiatingUserOrApp, InitiatingUserOrAppId, InitiatingIpAddress, InitiatingUserOrAppClassification
+| where parse_json(tostring(parse_json(InitiatingUserOrAppClassification))) !contains AppClassification
+| project-reorder OperationName, ApplicationObjectID, ApplicationDisplayName, ApplicationAppId, AppClassification, InitiatingUserOrApp, InitiatingUserOrAppId, InitiatingIpAddress, InitiatingUserOrAppClassification
