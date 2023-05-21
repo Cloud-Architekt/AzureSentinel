@@ -26,7 +26,8 @@
     AADPrivilegedEAM_CL
         | where TimeGenerated > ago(14d)
         | summarize arg_max(TimeGenerated, *) by ObjectId_g
-        | project ObjectId_g, AdminTierLevel_s, AdminTierLevelName_s, InitiatingUserOrAppClassification = parse_json(Classification_s)
+        | extend InitiatingUserOrAppClassification = iff(isnotempty(parse_json(Classification_s)), parse_json(Classification_s), "UserAccess")
+        | project ObjectId_g, AdminTierLevel_s, AdminTierLevelName_s, InitiatingUserOrAppClassification
     ) on $left.InitiatingUserOrAppId == $right.ObjectId_g
-| where parse_json(tostring(parse_json(InitiatingUserOrAppClassification))) !contains AddedPermissionClassification
+//| where parse_json(tostring(parse_json(InitiatingUserOrAppClassification))) !contains AddedPermissionClassification
 | project-reorder OperationName, ServicePrincipalObjectID, ServicePrincipalDisplayName, ServicePrincipalAppId, InitiatingUserOrApp, InitiatingUserOrAppId, InitiatingIpAddress, InitiatingUserOrAppClassification, UserAgent, AddedPermission, AddedPermissionClassification, AddedPermissionCategory
