@@ -10,7 +10,7 @@ requiredDataConnectors:
       - SigninLogs
   - connectorId: AzureActiveDirectory
     dataTypes:
-      - AADNonInteractiveUserSignInLogs    
+      - AADNonInteractiveUserSignInLogs
 queryFrequency: 1d
 queryPeriod: 1d
 triggerOperator: gt
@@ -39,9 +39,8 @@ entityMappings:
       - identifier: FullName
         columnName: AccountCustomEntity
   - entityType: IP
-    fieldMappings:        
+    fieldMappings:
       - identifier: Address
         columnName: IPCustomEntity
-version: 1.0.0
-
-
+version: 1.0.1
+kind: Scheduled

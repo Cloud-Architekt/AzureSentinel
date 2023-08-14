@@ -25,13 +25,13 @@ query: |
   | extend PasswordResetTime = TimeGenerated, UserPrincipalName = tostring(TargetResources[0].userPrincipalName), PasswordResetIP = tostring(InitiatedBy.user.ipAddress)
   | join kind= inner (
       AuditLogs
-      | where TimeGenerated >= ago(timeFrame) 
+      | where TimeGenerated >= ago(timeFrame)
       | where TargetResources contains "StrongAuthenticationMethod"
       | extend StrongAuthModifyTime = TimeGenerated, UserPrincipalName = tostring(TargetResources[0].userPrincipalName)
     // Audit Event contains no source IP, using OperationsName "Admin updated security info" is not covering reset of MFA
-  ) on UserPrincipalName 
+  ) on UserPrincipalName
   | where abs(datetime_diff('minute', PasswordResetTime, StrongAuthModifyTime)) <= resetDiff/1min
-  | summarize PasswordResetTime = max(PasswordResetTime), StrongAuthModifyTime = max(StrongAuthModifyTime) by UserPrincipalName, PasswordResetIP 
+  | summarize PasswordResetTime = max(PasswordResetTime), StrongAuthModifyTime = max(StrongAuthModifyTime) by UserPrincipalName, PasswordResetIP
   | extend timestamp = PasswordResetTime, AccountCustomEntity = UserPrincipalName, IPCustomEntity = PasswordResetIP
 entityMappings:
   - entityType: Account
@@ -42,4 +42,5 @@ entityMappings:
     fieldMappings:
       - identifier: Address
         columnName: IPCustomEntity
-version: 1.2.0
+version: 1.2.1
+kind: Scheduled
