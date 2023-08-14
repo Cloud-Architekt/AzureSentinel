@@ -29,7 +29,7 @@ query: |
   | extend TAPTargetId = tostring(TargetResources[0].id)
   | project TAPGeneratedTime = TimeGenerated, UserPrincipalName = TAPTargetUpn, TAPInitiatingUserOrApp, TAPInitiatingIpAddress
   | join kind= inner (
-      SigninLogs 
+      SigninLogs
       | where ResultType == "0"
       | where AuthenticationRequirement == "multiFactorAuthentication" or AuthenticationDetails contains "Windows Hello" or AuthenticationMethodsUsed  contains "FIDO2"
       | project SuccessLogonTime = TimeGenerated, UserPrincipalName, SuccessIPAddress = IPAddress
@@ -42,4 +42,5 @@ entityMappings:
     fieldMappings:
       - identifier: FullName
         columnName: AccountCustomEntity
-version: 1.0.0
+version: 1.0.1
+kind: Scheduled

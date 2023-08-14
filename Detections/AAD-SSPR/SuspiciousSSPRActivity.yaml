@@ -25,7 +25,7 @@ query: |
   let SSPRLookback = 1d;
   let maxTimeBetweenSSPRandSigninInMinutes=7*24*60; // per Default max. difference is set to 7 Days
   AuditLogs
-  | where TimeGenerated >= ago(SSPRLookback) 
+  | where TimeGenerated >= ago(SSPRLookback)
   | where LoggedByService == "Self-service Password Management" and ResultDescription == "User submitted their user ID"
   | extend AccountType = tostring(TargetResources[0].type), UserPrincipalName = tostring(TargetResources[0].userPrincipalName),
     TargetResourceName = tolower(tostring(TargetResources[0].displayName)), SSPRSourceIP = tostring(InitiatedBy.user.ipAddress)
@@ -53,4 +53,5 @@ entityMappings:
     fieldMappings:
       - identifier: Address
         columnName: IPCustomEntity
-version: 1.0.0
+version: 1.0.1
+kind: Scheduled
