@@ -1,0 +1,17 @@
+let User = "AdminUserName";
+let PublicIp = (DeviceInfo
+| where LoggedOnUsers contains User
+| distinct PublicIP);
+AADSignInEventsBeta
+| where AccountUpn contains User and IPAddress !in (PublicIp)
+| project Timestamp, Application, ResourceDisplayName, LogonType, ErrorCode, SessionId, IPAddress, Country
+| join kind=inner (AADSignInEventsBeta | where IPAddress in (PublicIp)) on $left.SessionId == $right.SessionId
+| distinct Timestamp, SessionId, Application, ResourceDisplayName, Country, IPAddress, ErrorCode
+
+// Show only event with IPC alerts on SessionId
+//| join kind=innerunique (AlertEvidence | extend SessionId = tostring(todynamic(AdditionalFields).SessionId)) on $left.SessionId == $right.SessionId
+//| distinct Application, ResourceDisplayName, Country, IPAddress, ErrorCode, DetectionSource, Title
+
+// Show only event with IPC alerts on IPAddress
+//| join kind=innerunique (AlertEvidence | extend SessionId = tostring(todynamic(AdditionalFields).SessionId)) on $left.IPAddress == $right.RemoteIP
+//| distinct Application, ResourceDisplayName, Country, IPAddress, ErrorCode, DetectionSource, Title
