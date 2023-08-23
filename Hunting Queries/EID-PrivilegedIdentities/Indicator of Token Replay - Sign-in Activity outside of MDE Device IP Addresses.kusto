@@ -1,6 +1,9 @@
-let User = "AdminUserName";
+let User = "AccountName";
 let PublicIp = (DeviceInfo
-| where LoggedOnUsers contains User
+| mv-expand todynamic(LoggedOnUsers)
+| extend ParsedLoggedOnUsers = parse_json(LoggedOnUsers)
+| extend LoggedOnUser = tostring(ParsedLoggedOnUsers.UserName)
+| where LoggedOnUser contains User
 | distinct PublicIP);
 AADSignInEventsBeta
 | where AccountUpn contains User and IPAddress !in (PublicIp)
