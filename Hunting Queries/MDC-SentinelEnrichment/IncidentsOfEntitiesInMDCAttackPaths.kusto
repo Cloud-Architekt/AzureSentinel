@@ -1,0 +1,15 @@
+arg("").securityresources
+| where type == "microsoft.security/attackpaths"
+| extend AttackPathDisplayName = tostring(properties["displayName"])
+| mvexpand (properties.graphComponent.entities)
+| extend Entity = parse_json(properties_graphComponent_entities)
+| extend ResourceId = tostring(tolower(Entity.entityIdentifiers.azureResourceId))
+| where ResourceId  != ""
+| project AttackPathDisplayName, ResourceId
+| join hint.remote=right (SecurityAlert
+    | extend EntitiesDynamicArray = parse_json(Entities) | mv-expand EntitiesDynamicArray
+    | extend Entitytype = tostring(parse_json(EntitiesDynamicArray).Type), EntityName = tostring(parse_json(EntitiesDynamicArray).Name)
+    | where Entitytype == "azure-resource"
+    | extend ResourceId = tostring(tolower(EntitiesDynamicArray.ResourceId))
+    | project TimeGenerated, AlertName, AlertSeverity, ResourceId
+) on ResourceId
