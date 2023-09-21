@@ -9,13 +9,13 @@ queryPeriod: 14d
 triggerOperator: gt
 triggerThreshold: 0
 tactics:
-- Persistence
-- CredentialAccess
-- PrivilegeEscalation
-- InitialAccess
+  - Persistence
+  - PrivilegeEscalation
+  - InitialAccess
+  - DefenseEvasion
 relevantTechniques:
-- T1098
-- T1078
+  - T1098
+  - T1078
 query: |
   // Query all users that habe the "Directory Synchronization Accounts" role assigned
   let DirSyncRoleAssignedMembers = (IdentityInfo
@@ -55,17 +55,17 @@ incidentConfiguration:
     lookbackDuration: 5m
     matchingMethod: AllEntities
     groupByEntities: []
-    groupByAlertDetails: 
+    groupByAlertDetails:
     groupByCustomDetails: []
 eventGroupingSettings:
   aggregationKind: SingleAlert
 entityMappings:
-- entityType: Account
-  fieldMappings:
-  - identifier: FullName
-    columnName: AccountUPN
-  - identifier: ObjectGuid
-    columnName: AccountObjectId
-  - identifier: DisplayName
-    columnName: AccountDisplayName
+  - entityType: Account
+    fieldMappings:
+      - identifier: FullName
+        columnName: AccountUPN
+      - identifier: ObjectGuid
+        columnName: AccountObjectId
+      - identifier: DisplayName
+        columnName: AccountDisplayName
 suppressionDuration: 1h
