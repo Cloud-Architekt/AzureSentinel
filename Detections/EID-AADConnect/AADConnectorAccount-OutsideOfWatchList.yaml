@@ -33,7 +33,7 @@ query: |
       | summarize by AccountObjectId = UserId);
   // Query all explicitly tagged Microsoft Entra Connect / Azure AD Connect account in the watchlist ServiceAccounts
   let WatchList = _GetWatchlist('ServiceAccounts')
-      | where ['Tags'] has '"Azure AD Connect"'
+      | where ['Tags'] has "Azure AD Connect"
       | project AccountObjectId = ['Service AAD Object Id'];
   // Combine the two lists and remove all known accounts
   // All resulting accounts are not possibly not allowed to use this API or have the role assigned
