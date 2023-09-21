@@ -23,11 +23,11 @@
   | mv-expand TargetResources.modifiedProperties | where TargetResources_modifiedProperties.displayName == "ServicePrincipal.DisplayName" | extend ServicePrincipalDisplayName = replace_string(tostring(TargetResources_modifiedProperties.newValue),'"','')
   | mv-expand TargetResources.modifiedProperties | where TargetResources_modifiedProperties.displayName == "ServicePrincipal.AppId" | extend ServicePrincipalAppId = replace_string(tostring(TargetResources_modifiedProperties.newValue),'"','')
   | join kind=inner (
-    AADPrivilegedEAM_CL
+    PrivilegedEAM_CL
         | where TimeGenerated > ago(14d)
-        | summarize arg_max(TimeGenerated, *) by ObjectId_g
-        | extend InitiatingUserOrAppClassification = iff(isnotempty(parse_json(Classification_s)), parse_json(Classification_s), "UserAccess")
-        | project ObjectId_g, AdminTierLevel_s, AdminTierLevelName_s, InitiatingUserOrAppClassification
-    ) on $left.InitiatingUserOrAppId == $right.ObjectId_g
+        | summarize arg_max(TimeGenerated, *) by ObjectId
+        | extend InitiatingUserOrAppClassification = iff(isnotempty(parse_json(Classification)), parse_json(Classification), "UserAccess")
+        | project ObjectId, ObjectAdminTierLevel, ObjectAdminTierLevelName, InitiatingUserOrAppClassification
+    ) on $left.InitiatingUserOrAppId == $right.ObjectId
 //| where parse_json(tostring(parse_json(InitiatingUserOrAppClassification))) !contains AddedPermissionClassification
 | project-reorder OperationName, ServicePrincipalObjectID, ServicePrincipalDisplayName, ServicePrincipalAppId, InitiatingUserOrApp, InitiatingUserOrAppId, InitiatingIpAddress, InitiatingUserOrAppClassification, UserAgent, AddedPermission, AddedPermissionClassification, AddedPermissionCategory

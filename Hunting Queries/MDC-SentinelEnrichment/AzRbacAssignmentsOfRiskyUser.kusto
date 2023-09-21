@@ -1,0 +1,13 @@
+AADRiskyUsers
+| where RiskLevel == "high" and RiskState == "atRisk"
+| extend principalId = tostring(Id)
+| join hint.remote=left (arg("").authorizationresources
+    | where type =~ 'microsoft.authorization/roleassignments'
+    | extend roleDefinitionId = properties.roleDefinitionId
+    | extend principalType = properties.principalType
+    | extend principalId = tostring(properties.principalId)
+    | extend roleAssignmentScope = properties.scope
+    | project principalId, roleDefinitionId, roleAssignmentScope
+) on principalId
+| project UserDisplayName, RiskDetail, RiskLevel, RiskState, roleAssignmentScope, roleDefinitionId
+
