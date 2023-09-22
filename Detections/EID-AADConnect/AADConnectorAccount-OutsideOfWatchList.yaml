@@ -1,41 +1,71 @@
-
 id: 86e9ba6f-d1ed-48b8-a849-c26f77db8c1b
-name: Detection of Azure AD connector accounts outside of WatchLists
-description: |
-  'List of objects with Directory role membership to "Directory Synchronization" or naming similar to AAD connector account which aren't stored in the WatchList was found. Indicator of creating AAD connector account as backdoor.'
+name: Detection of Microsoft Entra Connect accounts outside of WatchLists
+version: 1.0.2
+kind: Scheduled
+description: List of objects with Directory role membership to "Directory Synchronization" or naming similar to Microsoft Entra Connect account which aren't stored in the WatchList was found. Indicator of creating AAD connector account as backdoor.
 severity: Medium
-requiredDataConnectors:
-  - connectorId: AzureActiveDirectory
-    dataTypes:
-      - AuditLogs
 queryFrequency: 1d
-queryPeriod: 1d
+queryPeriod: 14d
 triggerOperator: gt
 triggerThreshold: 0
 tactics:
   - Persistence
-  - CredentialAccess
   - PrivilegeEscalation
   - InitialAccess
+  - DefenseEvasion
 relevantTechniques:
   - T1098
   - T1078
 query: |
+  // Query all users that habe the "Directory Synchronization Accounts" role assigned
   let DirSyncRoleAssignedMembers = (IdentityInfo
-  | where AssignedRoles contains "Directory Synchronization Accounts"
-  | summarize by AccountObjectId, AccountUPN = tolower(AccountUPN));
+      | where TimeGenerated > ago(14d)
+      | summarize arg_max(TimeGenerated, *) by AccountObjectId
+      | where AssignedRoles has "Directory Synchronization Accounts"
+      | summarize by AccountObjectId);
+  // Query all users that have signed in to the AADSync API
   let DirSyncNamedUsers = (union isfuzzy=true AADNonInteractiveUserSignInLogs, SigninLogs
-  // AADC APIs: AADSync = "cb1056e2-e479-49de-ae31-7812af012ed8", AAD Connect v2 = 6eb59a73-39b2-4c23-a70f-e2e3ce8965b1
-  | where (UserPrincipalName startswith "sync_" and UserPrincipalName endswith "onmicrosoft.com") or AppId == "cb1056e2-e479-49de-ae31-7812af012ed8" or AppId == "6eb59a73-39b2-4c23-a70f-e2e3ce8965b1"
-  | summarize by AccountObjectId = UserId, AccountCustomEntity = tolower(UserPrincipalName));
-  let WatchList = _GetWatchlist('ServiceAccounts') | where ['Tags'] == "Azure AD Connect" | project AccountObjectId = ['Service AAD Object Id'];
-  union isfuzzy=true DirSyncRoleAssignedMembers,DirSyncNamedUsers
-  | distinct tostring(AccountObjectId), AccountCustomEntity
+      | where TimeGenerated > ago(1d)
+      // AADC APIs: AADSync = "cb1056e2-e479-49de-ae31-7812af012ed8", AAD Connect v2 = 6eb59a73-39b2-4c23-a70f-e2e3ce8965b1
+      | where (UserPrincipalName startswith "sync_" and UserPrincipalName endswith "onmicrosoft.com")
+          or AppId == "cb1056e2-e479-49de-ae31-7812af012ed8"
+          or AppId == "6eb59a73-39b2-4c23-a70f-e2e3ce8965b1"
+      | summarize by AccountObjectId = UserId);
+  // Query all explicitly tagged Microsoft Entra Connect / Azure AD Connect account in the watchlist ServiceAccounts
+  let WatchList = _GetWatchlist('ServiceAccounts')
+      | where ['Tags'] has "Azure AD Connect"
+      | project AccountObjectId = ['Service AAD Object Id'];
+  // Combine the two lists and remove all known accounts
+  // All resulting accounts are not possibly not allowed to use this API or have the role assigned
+  union isfuzzy=true DirSyncRoleAssignedMembers, DirSyncNamedUsers
+  | summarize by AccountObjectId
   | where AccountObjectId !in (WatchList)
+  | join kind=leftouter (IdentityInfo
+      | where TimeGenerated > ago(14d)
+      | summarize arg_max(TimeGenerated, *) by AccountObjectId
+      )
+      on AccountObjectId
+  | project-away *1, TimeGenerated
+suppressionEnabled: false
+incidentConfiguration:
+  createIncident: true
+  groupingConfiguration:
+    enabled: false
+    reopenClosedIncident: false
+    lookbackDuration: 5m
+    matchingMethod: AllEntities
+    groupByEntities: []
+    groupByAlertDetails:
+    groupByCustomDetails: []
+eventGroupingSettings:
+  aggregationKind: SingleAlert
 entityMappings:
   - entityType: Account
     fieldMappings:
       - identifier: FullName
-        columnName: AccountCustomEntity
-version: 1.0.1
-kind: Scheduled
+        columnName: AccountUPN
+      - identifier: ObjectGuid
+        columnName: AccountObjectId
+      - identifier: DisplayName
+        columnName: AccountDisplayName
+suppressionDuration: 1h
