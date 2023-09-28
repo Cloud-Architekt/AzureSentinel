@@ -1,0 +1,7 @@
+// AzureAD backup authentication system has been introduced in November 2021 to increase resilience of this core service. Sign-in logs offers insights about tokens which has been reissued by the backup service.
+// More details about the backup system: https://learn.microsoft.com/en-us/azure/active-directory/architecture/backup-authentication-system?WT.mc_id=AZ-MVP-5003945
+
+union SigninLogs, AADNonInteractiveUserSignInLogs
+| where TimeGenerated >ago(30d)
+| summarize count() by (TokenIssuerType), bin(TimeGenerated, 1d)
+| render timechart

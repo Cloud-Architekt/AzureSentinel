@@ -1,7 +1,7 @@
 id: 065fd4ed-cce3-4f79-87de-d2d61490303b
-name: 'Sensitive actions in GitHub repository with Azure AD Federated Credentials'
+name: 'Sensitive actions in GitHub repository with Entra ID Federated Credentials'
 description: |
-  'Detection on pre-defined sensitive actions in repository which are federated with Azure AD service principal'
+  'Detection on pre-defined sensitive actions in repository which are federated with Entra ID service principal'
 severity: High
 requiredDataConnectors: []
 queryFrequency: 4h
@@ -31,4 +31,4 @@ entityMappings:
     fieldMappings:
       - identifier: FullName
         columnName: AccountCustomEntity
-version: 1.0.0
+version: 1.0.1

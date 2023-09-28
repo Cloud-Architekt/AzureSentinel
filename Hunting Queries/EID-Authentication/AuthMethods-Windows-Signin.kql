@@ -1,0 +1,19 @@
+// Query over all Windows Sign-ins
+union SigninLogs
+| where TimeGenerated >ago(30d)
+| where Resource == "Microsoft.aadiam" and AppDisplayName == "Windows Sign In"
+| extend authenticationMethod_ = tostring(parse_json(AuthenticationDetails)[0].authenticationMethod)
+| extend succeeded_ = tostring(parse_json(AuthenticationDetails)[0].succeeded)
+| where succeeded_ == "true"
+| extend authenticationStepDateTime_ = todatetime(tostring(parse_json(AuthenticationDetails)[0].authenticationStepDateTime))
+| extend displayName_ = tostring(DeviceDetail.displayName)
+| extend trustType_ = tostring(DeviceDetail.trustType)
+| extend deviceId_ = tostring(DeviceDetail.deviceId)
+| join kind=inner (
+  IdentityInfo
+  | where TimeGenerated > ago(14d)
+  | project TimeGenerated, AccountName, AccountObjectId
+  | summarize arg_max(TimeGenerated, *) by AccountObjectId)
+  on $left.UserId == $right.AccountObjectId
+| summarize Count=dcount(Identity) by authenticationMethod_, Identity
+| render piechart 
