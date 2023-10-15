@@ -1,0 +1,8 @@
+// Microsoft Graph Activity from IP Address which is different from sign-in
+
+MicrosoftGraphActivityLogs
+| project TimeGenerated, RequestId, ApiVersion, RequestMethod, ResponseStatusCode, ActivityIpAddress = IpAddress, UserAgent, RequestUri, Roles, AppId, Wids, SignInActivityId
+| join kind=inner (union AADServicePrincipalSignInLogs, AADManagedIdentitySignInLogs
+  | project ConditionalAccessPolicies, ConditionalAccessStatus, ServicePrincipalCredentialKeyId, SignInIpAddress = IPAddress, UniqueTokenIdentifier, Type
+) on $left.SignInActivityId == $right.UniqueTokenIdentifier
+| where ActivityIpAddress != SignInIpAddress and SignInIpAddress != ""

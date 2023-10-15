@@ -1,0 +1,14 @@
+// List of (active/permanent) Directory role member with with enriched classification from EntraOps Privileged EAM
+// by using IdentityInfo table from Microsoft Sentinel UEBA
+let SensitiveEntraDirectoryRoles = externaldata(RoleName: string, RoleId: string, isPrivileged: bool, Classification: dynamic)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_EntraIdDirectoryRoles.json"] with(format='multijson')
+| where Classification.EAMTierLevelName != "Unclassified"
+| extend EAMTierLevelName = Classification.EAMTierLevelName
+| project RoleName, isPrivileged, EAMTierLevelName;
+let SensitiveUsers = IdentityInfo
+| where TimeGenerated > ago(14d)
+| summarize arg_max(TimeGenerated, *) by AccountObjectId
+| mv-expand AssignedRoles
+| extend RoleName = tostring(AssignedRoles)
+| join kind=inner ( SensitiveEntraDirectoryRoles ) on RoleName;
+SensitiveUsers
+| project EAMTierLevelName, RoleName, AccountObjectId, AccountDisplayName, AccountUPN, IsAccountEnabled, UserType, SourceSystem
