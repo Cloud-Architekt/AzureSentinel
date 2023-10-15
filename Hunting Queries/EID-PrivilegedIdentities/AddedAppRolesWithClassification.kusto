@@ -1,0 +1,25 @@
+// Added API Permissions with enriched classification from EntraOps Privileged EAM
+// Modified version from "Admin promotion after Role Management Application Permission Grant" (f80d951a-eddc-4171-b9d0-d616bb83efdc) and "Service Principal Assigned App Role With Sensitive Access" (dd78a122-d377-415a-afe9-f22e08d2112c) from Microsoft Sentinel Repo
+let SensitiveMsGraphPermissions = externaldata(AppRoleDisplayName: string, AppRoleId: string, AppId: string, EAMTierLevelName: string, Category: string)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_AppRoles.json"] with(format='multijson');
+AuditLogs
+| where TimeGenerated >ago(90d)
+| where LoggedByService =~ "Core Directory"
+| where Category =~ "ApplicationManagement"
+| where AADOperationType =~ "Assign"  
+| where OperationName == "Add app role assignment to service principal"
+| where Result =~ "success"
+| mv-expand TargetResources
+| mv-expand TargetResources.modifiedProperties
+| extend ModifiedProperty = tostring(TargetResources_modifiedProperties.displayName)
+| where ModifiedProperty =~ "AppRole.Value"
+| extend AppRole = tostring(parse_json(tostring(TargetResources_modifiedProperties.newValue)))
+| extend InitiatingUserOrApp = iff(isnotempty(InitiatedBy.user.userPrincipalName),tostring(InitiatedBy.user.userPrincipalName), tostring(InitiatedBy.app.displayName))
+| extend InitiatingUserOrAppId = iff(isnotempty(InitiatedBy.user.id),tostring(InitiatedBy.user.id), tostring(InitiatedBy.app.id))
+| extend InitiatingIpAddress = iff(isnotempty(InitiatedBy.user.ipAddress), tostring(InitiatedBy.user.ipAddress), tostring(InitiatedBy.app.ipAddress))
+| extend UserAgent = iff(AdditionalDetails[0].key == "User-Agent",tostring(AdditionalDetails[0].value),"")
+| extend AddedPermission = replace_string(tostring(TargetResources_modifiedProperties.newValue),'"','')
+| join kind=inner ( SensitiveMsGraphPermissions | project AddedPermissionClassification = EAMTierLevelName, AddedPermissionCategory = Category, AppRoleDisplayName ) on $left.AddedPermission == $right.AppRoleDisplayName
+| mv-expand TargetResources.modifiedProperties | where TargetResources_modifiedProperties.displayName == "ServicePrincipal.ObjectID" | extend ServicePrincipalObjectID = replace_string(tostring(TargetResources_modifiedProperties.newValue),'"','')
+| mv-expand TargetResources.modifiedProperties | where TargetResources_modifiedProperties.displayName == "ServicePrincipal.DisplayName" | extend ServicePrincipalDisplayName = replace_string(tostring(TargetResources_modifiedProperties.newValue),'"','')
+| mv-expand TargetResources.modifiedProperties | where TargetResources_modifiedProperties.displayName == "ServicePrincipal.AppId" | extend ServicePrincipalAppId = replace_string(tostring(TargetResources_modifiedProperties.newValue),'"','')
+| project-reorder OperationName, ServicePrincipalObjectID, ServicePrincipalDisplayName, ServicePrincipalAppId, InitiatingUserOrApp, InitiatingUserOrAppId, InitiatingIpAddress, UserAgent, AddedPermission, AddedPermissionClassification, AddedPermissionCategory

@@ -1,0 +1,11 @@
+// Azure Activity from IP Address which is different from sign-in
+
+AzureActivity
+    | where parse_json(tostring(Authorization_d.evidence)).principalType == "ServicePrincipal"
+    | extend ClaimsObjectIdentifier = parse_json(Claims).["http://schemas.microsoft.com/identity/claims/objectidentifier"] 
+    | extend parsedClaims = parse_json(Claims_d)
+| project TimeGenerated, CorrelationId, OperationName, ResourceProviderValue, _ResourceId, ActivityIpAddress = CallerIpAddress, AppId = Claims_d.appid, Uti = tostring(Claims_d.uti)
+| join kind=inner (union AADServicePrincipalSignInLogs, AADManagedIdentitySignInLogs
+  | project ConditionalAccessPolicies, ConditionalAccessStatus, ServicePrincipalCredentialKeyId, SignInIpAddress = IPAddress, UniqueTokenIdentifier
+) on $left.Uti == $right.UniqueTokenIdentifier
+| where ActivityIpAddress != SignInIpAddress and SignInIpAddress != ""
