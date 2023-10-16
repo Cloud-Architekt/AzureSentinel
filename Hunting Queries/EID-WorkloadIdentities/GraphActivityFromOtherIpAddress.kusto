@@ -1,11 +1,11 @@
-// Microsoft Graph Activity from IP Address which is different from sign-in
-
-MicrosoftGraphActivityLogs
-| project TimeGenerated, RequestId, ApiVersion, RequestMethod, ResponseStatusCode, ActivityIpAddress = IpAddress, UserAgent, RequestUri, Roles, AppId, Wids, SignInActivityId
+AzureActivity
+| where TimeGenerated >ago(365d)
+    | where parse_json(tostring(Authorization_d.evidence)).principalType == "ServicePrincipal"
+    | extend ClaimsObjectIdentifier = parse_json(Claims).["http://schemas.microsoft.com/identity/claims/objectidentifier"] 
+    | extend parsedClaims = parse_json(Claims_d)
+| project TimeGenerated, CorrelationId, OperationName, ResourceProviderValue, _ResourceId, ActivityIpAddress = CallerIpAddress, AppId = Claims_d.appid, Uti = tostring(Claims_d.uti)
 | join kind=inner (union AADServicePrincipalSignInLogs, AADManagedIdentitySignInLogs
-  | project ConditionalAccessPolicies, ConditionalAccessStatus, ServicePrincipalCredentialKeyId, SignInIpAddress = IPAddress, UniqueTokenIdentifier, Type
-  // Correlation between Activity and Sign-in based on Unique Token Identifier
-) on $left.SignInActivityId == $right.UniqueTokenIdentifier
-| project TimeGenerated, RequestId, ActivityIpAddress, SignInIpAddress, ConditionalAccessStatus, ServicePrincipalCredentialKeyId, UserAgent, RequestMethod, RequestUri
-// AADManagedIdentitySignInLogs does not include SignInIpAddress
+  | project ConditionalAccessPolicies, ConditionalAccessStatus, ServicePrincipalCredentialKeyId, SignInIpAddress = IPAddress, UniqueTokenIdentifier
+) on $left.Uti == $right.UniqueTokenIdentifier
 | where ActivityIpAddress != SignInIpAddress and isnotempty(SignInIpAddress)
+| project TimeGenerated, CorrelationId, AppId, ActivityIpAddress, SignInIpAddress, ConditionalAccessStatus, ServicePrincipalCredentialKeyId, ResourceProviderValue, _ResourceId
