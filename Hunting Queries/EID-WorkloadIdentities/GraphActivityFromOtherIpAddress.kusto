@@ -5,4 +5,6 @@ MicrosoftGraphActivityLogs
 | join kind=inner (union AADServicePrincipalSignInLogs, AADManagedIdentitySignInLogs
   | project ConditionalAccessPolicies, ConditionalAccessStatus, ServicePrincipalCredentialKeyId, SignInIpAddress = IPAddress, UniqueTokenIdentifier, Type
 ) on $left.SignInActivityId == $right.UniqueTokenIdentifier
-| where ActivityIpAddress != SignInIpAddress and SignInIpAddress != ""
+| project TimeGenerated, RequestId, ActivityIpAddress, SignInIpAddress, ConditionalAccessStatus, ServicePrincipalCredentialKeyId, UserAgent, RequestMethod, RequestUri
+// AADManagedIdentitySignInLogs does not include SignInIpAddress
+| where ActivityIpAddress != SignInIpAddress and isnotempty(SignInIpAddress)
