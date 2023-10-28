@@ -11,7 +11,6 @@ let SpWithAppRole = _GetWatchlist('WorkloadIdentityInfo')
 | where isnotempty(AppRoleDisplayName)    
 | summarize AppRolePermissions = make_set(AppRoleDisplayName), AppRolePermissionTierLevels = make_set(AppRolePermissionTierLevel) by ServicePrincipalObjectId;
 let SpWithDirectoryRole = _GetWatchlist('WorkloadIdentityInfo')
-| search "aadops"
 | mv-expand parse_json(AssignedRoles)
 | extend AadDirectoryRoleId = tostring(AssignedRoles.RoleDefinitionId)
 | extend AadDirectoryRoleName = tostring(AssignedRoles.RoleDefinitionName)
@@ -23,6 +22,7 @@ let SpWithDirectoryRole = _GetWatchlist('WorkloadIdentityInfo')
 _GetWatchlist('WorkloadIdentityInfo')
 | join kind=leftouter (
     union SpWithAppRole, SpWithDirectoryRole
+    | summarize AppRolePermissions = make_set(AppRolePermissions), AppRolePermissionTierLevels = make_set(AppRolePermissionTierLevels), AadDirectoryRoles = make_set(AadDirectoryRoles), AadDirectoryRoleTierLevels = make_set(AadDirectoryRoleTierLevels) by ServicePrincipalObjectId
     ) on ServicePrincipalObjectId
 | extend Classification = iif((AppRolePermissionTierLevels contains "ControlPlane" or AadDirectoryRoleTierLevels contains "ControlPlane"), "ControlPlane", "Unclassified")
 | extend Classification = iif((Classification == "Unclassified" and (AppRolePermissionTierLevels contains "ManagementPlane" or AadDirectoryRoleTierLevels contains "ManagementPlane")), "ManagementPlane", Classification)
@@ -35,7 +35,7 @@ _GetWatchlist('WorkloadIdentityInfo')
     SignInAudience,
     UserAssignmentRequired,
     ServicePrincipalObjectId,
-    ApplicationObjectId = AppObjectId,
+    ApplicationObjectId = tostring(AppObjectId),
     ApplicationId = AppId,
     EntraIdRoles = AadDirectoryRoles,
     AppRolePermissions,

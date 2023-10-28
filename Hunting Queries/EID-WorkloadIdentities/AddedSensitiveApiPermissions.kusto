@@ -1,8 +1,8 @@
   // Added Sensitive API Permissions from unprivileged user
   // Modified version from "Admin promotion after Role Management Application Permission Grant" (f80d951a-eddc-4171-b9d0-d616bb83efdc) and "Service Principal Assigned App Role With Sensitive Access" (dd78a122-d377-415a-afe9-f22e08d2112c)
-  let SensitiveMsGraphPermissions = externaldata(EAMTierLevel: string, Category: string, APIPermission: string)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_MsGraphPermissions.json"] with(format='multijson');
+  let SensitiveMsGraphPermissions = externaldata(EAMTierLevelName: string, Category: string, AppRoleDisplayName: string)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_AppRoles.json"] with(format='multijson');
   AuditLogs
-  | where TimeGenerated >ago(90d)
+  | where TimeGenerated >ago(365d)
   | where LoggedByService =~ "Core Directory"
   | where Category =~ "ApplicationManagement"
   | where AADOperationType =~ "Assign"  
@@ -18,7 +18,7 @@
   | extend InitiatingIpAddress = iff(isnotempty(InitiatedBy.user.ipAddress), tostring(InitiatedBy.user.ipAddress), tostring(InitiatedBy.app.ipAddress))
   | extend UserAgent = iff(AdditionalDetails[0].key == "User-Agent",tostring(AdditionalDetails[0].value),"")
   | extend AddedPermission = replace_string(tostring(TargetResources_modifiedProperties.newValue),'"','')
-  | join kind=inner ( SensitiveMsGraphPermissions | project AddedPermissionClassification = EAMTierLevel, AddedPermissionCategory = Category, APIPermission ) on $left.AddedPermission == $right.APIPermission
+  | join kind=inner ( SensitiveMsGraphPermissions | project AddedPermissionClassification = EAMTierLevelName, AddedPermissionCategory = Category, AppRoleDisplayName ) on $left.AddedPermission == $right.AppRoleDisplayName
   | mv-expand TargetResources.modifiedProperties | where TargetResources_modifiedProperties.displayName == "ServicePrincipal.ObjectID" | extend ServicePrincipalObjectID = replace_string(tostring(TargetResources_modifiedProperties.newValue),'"','')
   | mv-expand TargetResources.modifiedProperties | where TargetResources_modifiedProperties.displayName == "ServicePrincipal.DisplayName" | extend ServicePrincipalDisplayName = replace_string(tostring(TargetResources_modifiedProperties.newValue),'"','')
   | mv-expand TargetResources.modifiedProperties | where TargetResources_modifiedProperties.displayName == "ServicePrincipal.AppId" | extend ServicePrincipalAppId = replace_string(tostring(TargetResources_modifiedProperties.newValue),'"','')
@@ -29,5 +29,5 @@
         | extend InitiatingUserOrAppClassification = iff(isnotempty(parse_json(Classification)), parse_json(Classification), "UserAccess")
         | project ObjectId, ObjectAdminTierLevel, ObjectAdminTierLevelName, InitiatingUserOrAppClassification
     ) on $left.InitiatingUserOrAppId == $right.ObjectId
-//| where parse_json(tostring(parse_json(InitiatingUserOrAppClassification))) !contains AddedPermissionClassification
+| where parse_json(tostring(parse_json(InitiatingUserOrAppClassification))) !contains AddedPermissionClassification and parse_json(tostring(parse_json(InitiatingUserOrAppClassification))) !contains "ControlPlane"
 | project-reorder OperationName, ServicePrincipalObjectID, ServicePrincipalDisplayName, ServicePrincipalAppId, InitiatingUserOrApp, InitiatingUserOrAppId, InitiatingIpAddress, InitiatingUserOrAppClassification, UserAgent, AddedPermission, AddedPermissionClassification, AddedPermissionCategory
