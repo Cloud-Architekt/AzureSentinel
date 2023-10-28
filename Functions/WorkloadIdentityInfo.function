@@ -28,4 +28,15 @@ _GetWatchlist('WorkloadIdentityInfo')
 | extend Classification = iif((Classification == "Unclassified" and (AppRolePermissionTierLevels contains "ManagementPlane" or AadDirectoryRoleTierLevels contains "ManagementPlane")), "ManagementPlane", Classification)
 | extend Classification = iif((Classification == "Unclassified" and (AppRolePermissionTierLevels contains "WorkloadPlane" or AadDirectoryRoleTierLevels contains "WorkloadPlane")), "WorkloadPlane", Classification)
 | extend Classification = iif((Classification == "Unclassified" and (AppRolePermissionTierLevels contains "UserAccess" or AadDirectoryRoleTierLevels contains "UserAccess")), "UserAccess", Classification)
-| project WorkloadIdentityName = AppDisplayName, AppId, AppObjectId, ServicePrincipalObjectId, ServicePrincipalType, IsFirstPartyApp, SignInAudience, UserAssignmentRequired, AadDirectoryRoles, AppRolePermissions, EnterpriseAccessTieringLevel = Classification
+| project 
+    WorkloadIdentityName = AppDisplayName,
+    WorkloadIdentityType = ServicePrincipalType,
+    IsFirstPartyApp,
+    SignInAudience,
+    UserAssignmentRequired,
+    ServicePrincipalObjectId,
+    ApplicationObjectId = AppObjectId,
+    ApplicationId = AppId,
+    EntraIdRoles = AadDirectoryRoles,
+    AppRolePermissions,
+    EnterpriseAccessModelTiering = Classification

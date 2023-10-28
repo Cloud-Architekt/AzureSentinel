@@ -38,9 +38,18 @@ AzADServicePrincipalInsights_CL
 | extend Classification = iif((Classification == "Unclassified" and (AppRolePermissionTierLevels contains "ManagementPlane" or AadDirectoryRoleTierLevels contains "ManagementPlane")), "ManagementPlane", Classification)
 | extend Classification = iif((Classification == "Unclassified" and (AppRolePermissionTierLevels contains "WorkloadPlane" or AadDirectoryRoleTierLevels contains "WorkloadPlane")), "WorkloadPlane", Classification)
 | extend Classification = iif((Classification == "Unclassified" and (AppRolePermissionTierLevels contains "UserAccess" or AadDirectoryRoleTierLevels contains "UserAccess")), "UserAccess", Classification)
-| extend SPDisplayName = tostring(parse_json(SP)[0].SPDisplayName)
-| extend SPObjectId = tostring(parse_json(SP)[0].SPObjectId)
-| extend APPObjectId = tostring(parse_json(SP).APP.APPObjectId)
-| extend SPAppId = tostring(parse_json(SP)[0].SPAppId)
-| extend SPObjectType = ObjectType
-| project SPDisplayName, SPObjectId, APPObjectId, SPAppId, SPObjectType, SPOwners, APPAppOwners, AppRolePermissions, AadDirectoryRoles, SPGroupMemberships, SPAzureRoleAssignments, Classification
+| extend WorkloadIdentityType = iff(ObjectType contains "SP MI", "ManagedIdentity", "Application")
+| project 
+    WorkloadIdentityName = tostring(parse_json(SP)[0].SPDisplayName),
+    WorkloadIdentityType,
+    ServicePrincipalObjectId = tostring(parse_json(SP)[0].SPObjectId),
+    ServicePrincipalOwners = SPOwners,
+    ServicePrincipalType = ObjectType,
+    ApplicationObjectId = tostring(parse_json(SP).APP.APPObjectId),
+    ApplicationId = tostring(parse_json(SP)[0].SPAppId),
+    ApplicationOwners = APPAppOwners,
+    EntraIdRoles = AadDirectoryRoles,
+    EntraGroupMemberships = APPAppOwners,
+    AppRolePermissions,
+    AzureRoles = SPAzureRoleAssignments,
+    EnterpriseAccessModelTiering = Classification
