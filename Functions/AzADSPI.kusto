@@ -1,0 +1,55 @@
+let SensitiveMsGraphPermissions = externaldata(EAMTierLevelName: string, Category: string, AppRoleDisplayName: string)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_AppRoles.json"] with(format='multijson');
+let SensitiveAadDirectoryRoles = externaldata(Classification: string, RolePermissions: string, Category: string, RoleId: string)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_EntraIdDirectoryRoles.json"] with(format='multijson') | mv-expand parse_json(RolePermissions)
+| summarize Category = make_list(RolePermissions.Category) by AadDirectoryRoleId = RoleId, AadDirectoryRoleTierLevel = tostring(parse_json(Classification).EAMTierLevelName);
+let SpWithAppRole = AzADServicePrincipalInsights_CL
+| where TimeGenerated > ago(14d)
+| summarize arg_max(TimeGenerated, *) by ObjectId
+| mv-expand parse_json(SPAppRoleAssignments)
+| mv-expand SPAppRoleAssignments.AppRolePermission
+| extend AppRolePermission = tostring(SPAppRoleAssignments_AppRolePermission) 
+| extend SPObjectId = tostring(parse_json(SP)[0].SPObjectId)
+| join kind=leftouter(
+    SensitiveMsGraphPermissions | project AppRolePermissionTierLevel = EAMTierLevelName, AppRolePermission = AppRoleDisplayName, Category
+    ) on AppRolePermission
+| where isnotempty(AppRolePermission)
+| summarize AppRolePermissions = make_set(AppRolePermission), AppRolePermissionTierLevels = make_set(AppRolePermissionTierLevel) by SPObjectId;
+let SpWithDirectoryRole = AzADServicePrincipalInsights_CL
+| where TimeGenerated > ago(14d)
+| summarize arg_max(TimeGenerated, *) by ObjectId
+| mv-expand parse_json(SPAADRoleAssignments)
+| mv-expand SPAADRoleAssignments.roleDefinitionName, SPAADRoleAssignments.roleDefinitionId
+| extend AadDirectoryRoleId = tostring(SPAADRoleAssignments_roleDefinitionId)
+| extend AadDirectoryRoleName = tostring(SPAADRoleAssignments_roleDefinitionName)
+| extend SPObjectId = tostring(parse_json(SP)[0].SPObjectId)
+| join kind=leftouter(
+    SensitiveAadDirectoryRoles
+    ) on AadDirectoryRoleId
+| where isnotempty(AadDirectoryRoleName)
+| summarize AadDirectoryRoles = make_set(AadDirectoryRoleName), AadDirectoryRoleTierLevels = make_set(AadDirectoryRoleTierLevel) by SPObjectId;
+AzADServicePrincipalInsights_CL
+| where TimeGenerated > ago(14d)
+| summarize arg_max(TimeGenerated, *) by ObjectId
+| mv-expand parse_json(APP), parse_json(SPAppRoleAssignments)
+| extend SPObjectId = tostring(parse_json(SP)[0].SPObjectId)
+| join kind=leftouter (
+    union SpWithAppRole, SpWithDirectoryRole
+    ) on SPObjectId
+| extend Classification = iif((AppRolePermissionTierLevels contains "ControlPlane" or AadDirectoryRoleTierLevels contains "ControlPlane"), "ControlPlane", "Unclassified")
+| extend Classification = iif((Classification == "Unclassified" and (AppRolePermissionTierLevels contains "ManagementPlane" or AadDirectoryRoleTierLevels contains "ManagementPlane")), "ManagementPlane", Classification)
+| extend Classification = iif((Classification == "Unclassified" and (AppRolePermissionTierLevels contains "WorkloadPlane" or AadDirectoryRoleTierLevels contains "WorkloadPlane")), "WorkloadPlane", Classification)
+| extend Classification = iif((Classification == "Unclassified" and (AppRolePermissionTierLevels contains "UserAccess" or AadDirectoryRoleTierLevels contains "UserAccess")), "UserAccess", Classification)
+| extend WorkloadIdentityType = iff(ObjectType contains "SP MI", "ManagedIdentity", "Application")
+| project 
+    WorkloadIdentityName = tostring(parse_json(SP)[0].SPDisplayName),
+    WorkloadIdentityType,
+    ServicePrincipalObjectId = tostring(parse_json(SP)[0].SPObjectId),
+    ServicePrincipalOwners = SPOwners,
+    ServicePrincipalType = ObjectType,
+    ApplicationObjectId = tostring(parse_json(SP).APP.APPObjectId),
+    ApplicationId = tostring(parse_json(SP)[0].SPAppId),
+    ApplicationOwners = APPAppOwners,
+    EntraIdRoles = AadDirectoryRoles,
+    EntraGroupMemberships = APPAppOwners,
+    AppRolePermissions,
+    AzureRoles = SPAzureRoleAssignments,
+    EnterpriseAccessModelTiering = Classification
