@@ -1,7 +1,9 @@
 id: ac0f93cf-249b-4515-b80e-c0a2ae96cb07
-name: Sign-in activity from external (privileged) user without MFA claim in the token.
+name: Sign-in activity from external/internal privileged user without MFA claim in the token.
 description: |
-  'This query over Azure Active Directory sign-in events will search for external privileged users (based on your defined adminAccountPreffix) without passing MFA requirements as satisfied in token's claim. This could be use as detection for access to inviting tenant without passing MFA requirements in the home tenant."
+  'This query over Azure Active Directory sign-in events will search for internal and external privileged users without passing MFA requirements as satisfied in token's claim.
+  List of privileged users will be created based on your defined adminAccountPreffix in a WatchList and Directory Role members from IdentityInfo.
+  This could be use as detection for access to inviting tenant without passing MFA requirements in the home tenant or internal user without enforcing MFA."
 severity: Medium
 requiredDataConnectors:
   - connectorId: AzureActiveDirectory
@@ -11,7 +13,7 @@ requiredDataConnectors:
     dataTypes:
       - AADNonInteractiveUserSignInLogs
 queryFrequency: 1h
-queryPeriod: 1h
+queryPeriod: 14d
 triggerOperator: gt
 triggerThreshold: 0
 tactics:
@@ -19,11 +21,37 @@ tactics:
 relevantTechniques:
   - T1078
 query: |
-  let adminAccountPreffix = 'adm';
+  // Get a list of all active/permanent directory role members of the last 14 days
+  let AdminsWithEntraIdRoles = IdentityInfo
+  | where TimeGenerated >ago(14d)
+  | where isnotempty(AssignedRoles) and AssignedRoles != "[]"
+  | summarize by AccountUPN;
+  // Get a list of all privileged users by RegEx
+  let adminAccountRegex = toscalar(_GetWatchlist('wl_sentinel_AdminRegex') | project Regex);  
+  let AdminAccounts = IdentityInfo
+  | where TimeGenerated >ago(14d)
+  | summarize arg_max(TimeGenerated, *) by AccountObjectId
+  | where AccountUPN matches regex adminAccountRegex
+  | summarize by AccountUPN;
+  // combine Admins
+  let AllAdmins = union AdminAccounts, AdminsWithEntraIdRoles | summarize by AccountUPN;
+  // combine Logs
   union AADNonInteractiveUserSignInLogs, SigninLogs
-  | where ResultType == "0" and UserPrincipalName startswith adminAccountPreffix
-  | where Status_string !contains "MFA requirement satisfied by claim in the token"
-  | project timestamp = TimeGenerated, AccountCustomEntity = UserPrincipalName, IPCustomEntity = IPAddress
+  | where ResultType == "0" and UserPrincipalName in~ (AdminAccounts)
+  // Sign-in to the tenant which is running the query
+  | where AADTenantId == ResourceTenantId
+  | where TimeGenerated >ago(1h)
+  | extend Status = iff(isempty( Status_dynamic ), todynamic(Status_string), Status_dynamic)
+  // Exclude Windows Sign-in, Registration Client and Microsoft Authentication Broker
+  | where AppId !in ("29d9ed98-a469-4536-ade2-f981bc1d605e", "38aa3b87-a06d-4817-b275-7a316988d93b", "dd762716-544d-4aeb-a526-687b73838a22")
+  | where not(Status.additionalDetails has_any("MFA completed in Azure AD", "MFA requirement satisfied by"))
+  // adjust AlertName to include User type (Internal/External)
+  | extend AlertName = iff( (HomeTenantId == ResourceTenantId) , "Sign-in activity from privileged user without MFA claim in the token", "Sign-in activity from (external) privileged user without MFA claim in the token")
+  | project TimeGenerated, AlertName, AccountCustomEntity = UserPrincipalName, IPCustomEntity = IPAddress, CorrelationId, HomeTenantId, AppDisplayName
+alertDetailsOverride:
+  alertDisplayNameFormat: '{{AlertName}}'
+customDetails:
+  Home_TenantId: HomeTenantId  
 entityMappings:
   - entityType: Account
     fieldMappings:
