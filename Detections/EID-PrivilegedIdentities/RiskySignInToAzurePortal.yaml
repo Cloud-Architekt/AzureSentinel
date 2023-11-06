@@ -22,7 +22,6 @@ query: |
   union AADNonInteractiveUserSignInLogs, SigninLogs
   | where ConditionalAccessStatus == "notApplied" and ResultType == "0"
   | where RiskLevelDuringSignIn != "none" or RiskLevelAggregated != "none"
-  | where UserPrincipalName contains "RiskyGuest"
   | project timestamp = TimeGenerated, AccountCustomEntity = UserPrincipalName, IPCustomEntity = IPAddress, AppDisplayName, RiskLevelDuringSignIn, RiskLevelAggregated, RiskDetail, RiskState, IsRisky, OriginalRequestId
 entityMappings:
   - entityType: Account
