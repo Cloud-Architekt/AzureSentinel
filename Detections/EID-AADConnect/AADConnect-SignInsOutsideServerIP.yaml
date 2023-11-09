@@ -1,4 +1,3 @@
-
 id: 12531591-8392-4b4c-b117-485216bbf577
 name: Successful sign-ins from valid AAD connector account outside of whitelisted IP address from WatchList
 description: |
@@ -24,9 +23,9 @@ relevantTechniques:
   - T1528
 query: |
   let AADCServer = (_GetWatchlist('HighValueAssets')
-      | where ['Tags'] == "Azure AD Connect" | project ['IP Address']);
+      | where ['Tags'] has "Azure AD Connect" | project ['IP Address']);
   let AADConnectorAcc = (_GetWatchlist('ServiceAccounts')
-      | where ['Tags'] == "Azure AD Connect" | project AccountObjectId = ['Service AAD Object Id']);
+      | where ['Tags'] has "Azure AD Connect" | project AccountObjectId = ['Service AAD Object Id']);
   union isfuzzy=true AADNonInteractiveUserSignInLogs, SigninLogs
   // AADC APIs: AADSync = "cb1056e2-e479-49de-ae31-7812af012ed8", AAD Connect v2 = 6eb59a73-39b2-4c23-a70f-e2e3ce8965b1
   | where (UserId in (AADConnectorAcc) or AppId == "cb1056e2-e479-49de-ae31-7812af012ed8" or AppId == "6eb59a73-39b2-4c23-a70f-e2e3ce8965b1") and IPAddress !in (AADCServer)
@@ -42,5 +41,5 @@ entityMappings:
     fieldMappings:
       - identifier: Address
         columnName: IPCustomEntity
-version: 1.0.1
+version: 1.0.2
 kind: Scheduled
