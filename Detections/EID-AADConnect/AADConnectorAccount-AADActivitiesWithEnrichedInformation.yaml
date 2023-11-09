@@ -1,4 +1,3 @@
-
 id: 5f1bdb2f-5622-4ab2-bc4b-96cc9ff480c8
 name: Activities from AAD connector account with enrichment of IdentityInfo
 description: |
@@ -37,11 +36,7 @@ entityMappings:
       - identifier: FullName
         columnName: AccountCustomEntity
   - entityType: IP
-    fieldMappings:        
+    fieldMappings:
       - identifier: Address
-        columnName: IPCustomEntity       
-version: 1.0.0
-
-
-
-
+        columnName: IPCustomEntity
+version: 1.0.1
