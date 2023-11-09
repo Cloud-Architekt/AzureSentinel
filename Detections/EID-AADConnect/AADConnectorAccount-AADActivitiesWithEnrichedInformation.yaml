@@ -20,9 +20,9 @@ relevantTechniques:
   - T1078
 query: |
   let AADConnectorAcc = (_GetWatchlist('ServiceAccounts')
-      | where ['Tags'] == "Azure AD Connect" | project AccountObjectId = ['Service AAD Object Id']);
+      | where ['Tags'] has "Azure AD Connect" | project AccountObjectId = ['Service AAD Object Id']);
   let AADCServer = (_GetWatchlist('HighValueAssets')
-      | where ['Tags'] == "Azure AD Connect" | project ['IP Address']);    
+      | where ['Tags'] has "Azure AD Connect" | project ['IP Address']);    
   AuditLogs
   | extend ActorAccountObjectId = tostring(parse_json(tostring(InitiatedBy.user)).id)
   | extend ActorAccountIPAddress = tostring(parse_json(tostring(InitiatedBy.user)).ipAddress)
