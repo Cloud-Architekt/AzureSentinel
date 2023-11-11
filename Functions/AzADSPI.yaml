@@ -1,0 +1,26 @@
+id: 136d1433-aca3-4f83-820d-ee2fa5a6ab39
+Function:
+  Title: Parser for AzADServicePrincipalInsights to get unified schema for Workload Identity Analytics Rules 
+  Version: '1.0.0'
+  LastUpdated: '2023-11-11'
+Category: Microsoft Sentinel Parser
+FunctionName: AzADSPI
+FunctionAlias: AzADSPI
+FunctionQuery: |
+    AzADServicePrincipalInsights_CL
+    | where TimeGenerated > ago(14d)
+    | summarize arg_max(TimeGenerated, *) by ObjectId
+    | extend AppObjectId = tostring(parse_json(APP)[0].APPObjectId)
+    | extend SPObjectId = tostring(parse_json(SP)[0].SPObjectId)
+    | extend WorkloadIdentityType = iff(ObjectType contains "SP MI", "ManagedIdentity", "Application")
+    | project 
+        WorkloadIdentityName = tostring(parse_json(SP)[0].SPDisplayName),
+        WorkloadIdentityType,
+        ServicePrincipalObjectId = SPObjectId,
+        ServicePrincipalOwners = SPOwners,
+        ServicePrincipalType = ObjectType,
+        ApplicationObjectId = AppObjectId,
+        ApplicationId = tostring(parse_json(SP)[0].SPAppId),
+        ApplicationOwners = APPAppOwners,
+        EntraGroupMemberships = APPAppOwners,
+        AzureRoles = SPAzureRoleAssignments
