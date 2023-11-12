@@ -1,0 +1,104 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "workspace": {
+            "type": "String"
+        }
+    },
+    "resources": [
+        {
+            "id": "[concat(resourceId('Microsoft.OperationalInsights/workspaces/providers', parameters('workspace'), 'Microsoft.SecurityInsights'),'/alertRules/7006a60d-9506-4bae-b958-1f68f9bdc107')]",
+            "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/7006a60d-9506-4bae-b958-1f68f9bdc107')]",
+            "type": "Microsoft.OperationalInsights/workspaces/providers/alertRules",
+            "kind": "Scheduled",
+            "apiVersion": "2022-11-01-preview",
+            "properties": {
+                "displayName": "Workload ID Protection Alerts with Enriched Information",
+                "description": "This analytic rule is creating an incident from Workload ID Protection with Entity Mapping to Cloud Application and other enrichments from the original event in the SecurityAlert.",
+                "severity": "Medium",
+                "enabled": true,
+                "query": "SecurityAlert\n| where ProviderName == \"IPC\"\n| where parse_json(ExtendedProperties).State == \"Open\" and Status == \"New\"\n| mv-expand parse_json(Entities)\n| where Entities.Type == \"service-principal\"\n| extend ServicePrincipalObjectId = tostring(Entities.ServicePrincipalObjectId)\n| project\n    TimeGenerated,\n    SystemAlertId,\n    AlertName,\n    AlertSeverity,\n    Description,\n    Tactics,\n    Techniques,\n    ProviderName,\n    ProductName,\n    AlertType,\n    DetailedDescription = parse_json(ExtendedProperties).[\"Detail Description\"],\n    ServicePrincipalObjectId\n| join kind=inner (\n    PrivilegedWorkloadIdentityInfo\n    | project\n        WorkloadIdentityName,\n        WorkloadIdentityType,\n        IsFirstPartyApp,\n        tostring(ApplicationId),\n        tostring(ServicePrincipalObjectId),\n        EnterpriseAccessModelTiering,\n        EntraIdRoles,\n        AppRolePermissions\n    )\n    on ServicePrincipalObjectId\n| join kind=inner (\n    SecurityIncident\n    | mv-expand AlertIds\n    | extend SystemAlertId = tostring(AlertIds)\n    | summarize arg_max(TimeGenerated, *) by SystemAlertId\n    | project\n        SystemAlertId,\n        IncidentUrl = AdditionalData.providerIncidentUrl,\n        IncidentStatus = Status,\n        IncidentName = IncidentNumber,\n        // Use Tactics from M365D Data Connector, original Alert Provider contains values which not matches with Sentinel TTPs (e.g., PreAttack)\n        IncidentTactics = parse_json(tostring(AdditionalData.tactics))\n    )\n    on SystemAlertId\n\n",
+                "queryFrequency": "PT4H",
+                "queryPeriod": "PT4H",
+                "triggerOperator": "GreaterThan",
+                "triggerThreshold": 0,
+                "suppressionDuration": "PT5H",
+                "suppressionEnabled": false,
+                "startTimeUtc": null,
+                "tactics": [],
+                "techniques": [],
+                "alertRuleTemplateName": null,
+                "incidentConfiguration": {
+                    "createIncident": true,
+                    "groupingConfiguration": {
+                        "enabled": false,
+                        "reopenClosedIncident": false,
+                        "lookbackDuration": "PT5H",
+                        "matchingMethod": "AllEntities",
+                        "groupByEntities": [],
+                        "groupByAlertDetails": [],
+                        "groupByCustomDetails": []
+                    }
+                },
+                "eventGroupingSettings": {
+                    "aggregationKind": "SingleAlert"
+                },
+                "alertDetailsOverride": {
+                    "alertDisplayNameFormat": "{{AlertName}}",
+                    "alertDescriptionFormat": "{{DetailedDescription}}",
+                    "alertTacticsColumnName": "IncidentTactics",
+                    "alertSeverityColumnName": "AlertSeverity",
+                    "alertDynamicProperties": [
+                        {
+                            "alertProperty": "ProviderName",
+                            "value": "ProviderName"
+                        },
+                        {
+                            "alertProperty": "ProductName",
+                            "value": "ProductName"
+                        },
+                        {
+                            "alertProperty": "Techniques",
+                            "value": "Techniques"
+                        },
+                        {
+                            "alertProperty": "AlertLink",
+                            "value": "IncidentUrl"
+                        }
+                    ]
+                },
+                "customDetails": {
+                    "WorkloadIdentityName": "WorkloadIdentityName",
+                    "WorkloadIdentityType": "WorkloadIdentityType",
+                    "IsFirstPartyApp": "IsFirstPartyApp",
+                    "PrivilegedAccess": "EnterpriseAccessModelTiering",
+                    "EntraDirectoryRoles": "EntraIdRoles",
+                    "MSGraphRoles": "AppRolePermissions"
+                },
+                "entityMappings": [
+                    {
+                        "entityType": "CloudApplication",
+                        "fieldMappings": [
+                            {
+                                "identifier": "Name",
+                                "columnName": "WorkloadIdentityName"
+                            }
+                        ]
+                    },
+                    {
+                        "entityType": "CloudApplication",
+                        "fieldMappings": [
+                            {
+                                "identifier": "AppId",
+                                "columnName": "ApplicationId"
+                            }
+                        ]
+                    }
+                ],
+                "sentinelEntitiesMappings": null,
+                "templateVersion": null
+            }
+        }
+    ]
+}

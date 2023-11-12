@@ -1,0 +1,75 @@
+id: effaa7bb-cf4c-4087-a962-82c15e816138
+name: MDA App Governance Alerts with Enriched Information
+version: 1.0.0
+kind: Scheduled
+description: This analytic rule is creating an incident from MDA App Governance with Entity Mapping to Cloud Application and other enrichments from the original event in the SecurityAlert.
+severity: Medium
+queryFrequency: 4h
+queryPeriod: 4h
+triggerOperator: gt
+triggerThreshold: 0
+query: |+
+  SecurityAlert
+  | where ProductName == "Microsoft Application Protection"
+  | where TimeGenerated > ago(15d)
+  | extend CloudAppUrl = parse_url(Description)
+  | extend CloudAppUrlParam = parse_json(tostring(CloudAppUrl.["Query Parameters"])).oauthAppId
+  | extend AppId = tostring(toguid(CloudAppUrlParam))
+  | extend Category = tostring(parse_json(ExtendedProperties).Category)
+  | extend AlertDisplayName = tostring(DisplayName)
+  | join kind=inner (
+      PrivilegedWorkloadIdentityInfo
+      | project WorkloadIdentityName, WorkloadIdentityType, IsFirstPartyApp, AppId = tostring(ApplicationId), tostring(ServicePrincipalObjectId), EnterpriseAccessModelTiering, EntraIdRoles, AppRolePermissions
+      ) on AppId
+  | join kind=inner (
+      SecurityIncident
+      | mv-expand AlertIds | extend SystemAlertId = tostring(AlertIds)
+      | summarize arg_max(TimeGenerated, *) by SystemAlertId
+      | project SystemAlertId, IncidentUrl = AdditionalData.providerIncidentUrl, IncidentStatus = Status, IncidentName = IncidentNumber
+      ) on SystemAlertId
+
+suppressionEnabled: false
+incidentConfiguration:
+  createIncident: true
+  groupingConfiguration:
+    enabled: false
+    reopenClosedIncident: false
+    lookbackDuration: 5h
+    matchingMethod: AllEntities
+    groupByEntities: []
+    groupByAlertDetails: []
+    groupByCustomDetails: []
+eventGroupingSettings:
+  aggregationKind: SingleAlert
+alertDetailsOverride:
+  alertDisplayNameFormat: '{{AlertName}} '
+  alertDescriptionFormat: '{{Description}} '
+  alertTacticsColumnName: Tactics
+  alertSeverityColumnName: AlertSeverity
+  alertDynamicProperties:
+  - alertProperty: AlertLink
+    value: AlertLink
+  - alertProperty: Techniques
+    value: Techniques
+  - alertProperty: ProviderName
+    value: ProviderName
+  - alertProperty: RemediationSteps
+    value: RemediationSteps
+customDetails:
+  WorkloadIdentityName: WorkloadIdentityName
+  WorkloadIdentityType: WorkloadIdentityType
+  IsFirstPartyApp: IsFirstPartyApp
+  PrivilegedAccess: EnterpriseAccessModelTiering
+  EntraDirectoryRoles: EntraIdRoles
+  MSGraphRoles: AppRolePermissions
+entityMappings:
+- entityType: CloudApplication
+  fieldMappings:
+  - identifier: AppId
+    columnName: AppId
+- entityType: CloudApplication
+  fieldMappings:
+  - identifier: Name
+    columnName: WorkloadIdentityName
+suppressionDuration: 5h
+

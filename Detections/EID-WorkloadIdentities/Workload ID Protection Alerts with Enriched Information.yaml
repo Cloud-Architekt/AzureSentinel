@@ -1,0 +1,103 @@
+id: 7006a60d-9506-4bae-b958-1f68f9bdc107
+name: Workload ID Protection Alerts with Enriched Information
+version: 1.0.0
+kind: Scheduled
+description: This analytic rule is creating an incident from Workload ID Protection with Entity Mapping to Cloud Application and other enrichments from the original event in the SecurityAlert.
+severity: Medium
+queryFrequency: 4h
+queryPeriod: 4h
+triggerOperator: gt
+triggerThreshold: 0
+query: |+
+  SecurityAlert
+  | where ProviderName == "IPC"
+  | where parse_json(ExtendedProperties).State == "Open" and Status == "New"
+  | mv-expand parse_json(Entities)
+  | where Entities.Type == "service-principal"
+  | extend ServicePrincipalObjectId = tostring(Entities.ServicePrincipalObjectId)
+  | project
+      TimeGenerated,
+      SystemAlertId,
+      AlertName,
+      AlertSeverity,
+      Description,
+      Tactics,
+      Techniques,
+      ProviderName,
+      ProductName,
+      AlertType,
+      DetailedDescription = parse_json(ExtendedProperties).["Detail Description"],
+      ServicePrincipalObjectId
+  | join kind=inner (
+      PrivilegedWorkloadIdentityInfo
+      | project
+          WorkloadIdentityName,
+          WorkloadIdentityType,
+          IsFirstPartyApp,
+          tostring(ApplicationId),
+          tostring(ServicePrincipalObjectId),
+          EnterpriseAccessModelTiering,
+          EntraIdRoles,
+          AppRolePermissions
+      )
+      on ServicePrincipalObjectId
+  | join kind=inner (
+      SecurityIncident
+      | mv-expand AlertIds
+      | extend SystemAlertId = tostring(AlertIds)
+      | summarize arg_max(TimeGenerated, *) by SystemAlertId
+      | project
+          SystemAlertId,
+          IncidentUrl = AdditionalData.providerIncidentUrl,
+          IncidentStatus = Status,
+          IncidentName = IncidentNumber,
+          // Use Tactics from M365D Data Connector, original Alert Provider contains values which not matches with Sentinel TTPs (e.g., PreAttack)
+          IncidentTactics = parse_json(tostring(AdditionalData.tactics))
+      )
+      on SystemAlertId
+
+suppressionEnabled: false
+incidentConfiguration:
+  createIncident: true
+  groupingConfiguration:
+    enabled: false
+    reopenClosedIncident: false
+    lookbackDuration: 5h
+    matchingMethod: AllEntities
+    groupByEntities: []
+    groupByAlertDetails: []
+    groupByCustomDetails: []
+eventGroupingSettings:
+  aggregationKind: SingleAlert
+alertDetailsOverride:
+  alertDisplayNameFormat: '{{AlertName}}'
+  alertDescriptionFormat: '{{DetailedDescription}}'
+  alertTacticsColumnName: IncidentTactics
+  alertSeverityColumnName: AlertSeverity
+  alertDynamicProperties:
+  - alertProperty: ProviderName
+    value: ProviderName
+  - alertProperty: ProductName
+    value: ProductName
+  - alertProperty: Techniques
+    value: Techniques
+  - alertProperty: AlertLink
+    value: IncidentUrl
+customDetails:
+  WorkloadIdentityName: WorkloadIdentityName
+  WorkloadIdentityType: WorkloadIdentityType
+  IsFirstPartyApp: IsFirstPartyApp
+  PrivilegedAccess: EnterpriseAccessModelTiering
+  EntraDirectoryRoles: EntraIdRoles
+  MSGraphRoles: AppRolePermissions
+entityMappings:
+- entityType: CloudApplication
+  fieldMappings:
+  - identifier: Name
+    columnName: WorkloadIdentityName
+- entityType: CloudApplication
+  fieldMappings:
+  - identifier: AppId
+    columnName: ApplicationId
+suppressionDuration: 5h
+
