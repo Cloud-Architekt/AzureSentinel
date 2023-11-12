@@ -1,0 +1,100 @@
+id: d4ae2281-9c29-4ce6-b554-0c124efb14b1
+name: UEBA Behavior anomaly on Application Management
+version: 1.0.0
+kind: Scheduled
+description: |-
+  Anomaly detected by UEBA with investigation priority score in combination with one of the following conditions:
+  - Actor has no active or permanent Entra ID role assignment in the past 14 days
+  - Risky User with Risk Level of Medium or higher
+
+  The incident will be increased to “High” severity if the Actor has been assigned to “Control Plane” Entra ID role in the past 14 days. All other results will be set to severity “Informational” and not included in the incident creation.
+severity: Medium
+queryFrequency: 14d
+queryPeriod: 14d
+triggerOperator: gt
+triggerThreshold: 0
+query: |
+  // List of (active/permanent) Directory role member with with enriched classification from EntraOps Privileged EAM
+  // by using IdentityInfo table from Microsoft Sentinel UEBA
+  let SensitiveEntraDirectoryRoles = externaldata(RoleName: string, RoleId: string, isPrivileged: bool, Classification: dynamic)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_EntraIdDirectoryRoles.json"] with(format='multijson')
+      | where Classification.EAMTierLevelName != "Unclassified"
+      | extend EAMTierLevelName = Classification.EAMTierLevelName
+      | project RoleName, isPrivileged, EAMTierLevelName;
+  let AllUsers = IdentityInfo
+      | where TimeGenerated > ago(14d)
+      | mv-expand AssignedRoles
+      | extend RoleName = tostring(AssignedRoles)
+      | join kind=leftouter (SensitiveEntraDirectoryRoles) on RoleName
+      | extend EnterpriseAccessModelLevel = iff(isempty(EAMTierLevelName), "UserAccess", EAMTierLevelName)
+      | summarize
+          EnterpriseAccessModelTiering = make_set(EnterpriseAccessModelLevel),
+          PastRoleAssignments = make_set(RoleName),
+          PastRiskLevel = make_set(RiskLevel),
+          PastRiskState = make_set(RiskState)
+          by UserId = AccountObjectId, UserPrincipalName = AccountUPN, IsAccountEnabled;
+  BehaviorAnalytics
+  | where TimeGenerated > ago(1d)
+  | where ActivityType == "ApplicationManagement"
+  | join kind=inner (AllUsers) on UserPrincipalName
+  // Increase severity if investigation priority is larger than 1 and risk on level Medium or High has been detected by the user in the past 14 days or user has no privileged directory role in the past or 
+  | extend Severity = iff(InvestigationPriority > 1 and (EnterpriseAccessModelTiering[0] == "UserAccess" or (PastRiskState[0] == "AtRisk" and (PastRiskLevel contains "Medium" or PastRiskLevel contains "High"))), "Low", "Informational")
+  // Step up severity to "High" if actor is Control Plane administrator
+  | extend Severity = iff(EnterpriseAccessModelTiering contains "ControlPlane" and Severity != "Informational", "Medium", Severity)
+  // Informational events will be filtered and not considered for incidents
+  | where Severity != "Informational"
+  | mv-expand parse_json(ActivityInsights)
+  | where ActivityInsights !contains "False"
+  | project
+      Severity,
+      TimeGenerated,
+      InvestigationPriority,
+      ActivityType,
+      ActionType,
+      ActivityInsights,
+      EnterpriseAccessModelTiering,
+      UserPrincipalName,
+      SourceIPAddress,
+      PastRoleAssignments,
+      PastRiskLevel,
+      PastRiskState,
+      Type
+suppressionEnabled: false
+incidentConfiguration:
+  createIncident: true
+  groupingConfiguration:
+    enabled: false
+    reopenClosedIncident: false
+    lookbackDuration: 5h
+    matchingMethod: AllEntities
+    groupByEntities: []
+    groupByAlertDetails: []
+    groupByCustomDetails: []
+eventGroupingSettings:
+  aggregationKind: SingleAlert
+alertDetailsOverride:
+  alertDisplayNameFormat: 'UEBA Behavior anomaly: {{ActivityType}} '
+  alertDescriptionFormat: ' {{ActionType}} with the following anomaly: {{ActivityInsights}} '
+  alertSeverityColumnName: Severity
+  alertDynamicProperties:
+  - alertProperty: ProductComponentName
+    value: Type
+customDetails:
+  InvestigationScore: InvestigationPriority
+  ActivityType: ActivityType
+  ActionType: ActionType
+  ActivityInsights: ActivityInsights
+  UserClassification: EnterpriseAccessModelTiering
+  PastDirectoryRoles: PastRoleAssignments
+  PastUserRiskLevel: PastRiskLevel
+  PastRiskState: PastRiskState
+entityMappings:
+- entityType: Account
+  fieldMappings:
+  - identifier: Name
+    columnName: UserPrincipalName
+- entityType: IP
+  fieldMappings:
+  - identifier: Address
+    columnName: SourceIPAddress
+suppressionDuration: 5h
+
