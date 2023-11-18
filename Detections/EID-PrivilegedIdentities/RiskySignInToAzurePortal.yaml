@@ -22,8 +22,8 @@ query: |
   union AADNonInteractiveUserSignInLogs, SigninLogs
   | where ConditionalAccessStatus == "notApplied" and ResultType == "0"
   | where RiskLevelDuringSignIn != "none" or RiskLevelAggregated != "none"
-  // c44b4083-3bb0-49c1-b47d-974e53cbdf3c -> Azure Portal, 5926fc8e-304e-4f59-8bed-58ca97cc39a4 -> Microsoft Intune portal extension, fc780465-2017-40d4-a0c5-307022471b92 -> WindowsDefenderATP, 80ccca67-54bd-44ab-8625-4b79c4dc7775 -> Microsoft 365 Security and Compliance Center, 7b7531ad-5926-4f2d-8a1d-38495ad33e17 -> Azure Advanced Threat Protection
-  | where AppId in ("c44b4083-3bb0-49c1-b47d-974e53cbdf3c","5926fc8e-304e-4f59-8bed-58ca97cc39a4","80ccca67-54bd-44ab-8625-4b79c4dc7775","fc780465-2017-40d4-a0c5-307022471b92","7b7531ad-5926-4f2d-8a1d-38495ad33e17")
+  // Azure Portal: c44b4083-3bb0-49c1-b47d-974e53cbdf3c
+  | where AppId in ("c44b4083-3bb0-49c1-b47d-974e53cbdf3c")
   | project timestamp = TimeGenerated, AccountCustomEntity = UserPrincipalName, IPCustomEntity = IPAddress, AppDisplayName, RiskLevelDuringSignIn, RiskLevelAggregated, RiskDetail, RiskState, IsRisky, OriginalRequestId
 entityMappings:
   - entityType: Account
