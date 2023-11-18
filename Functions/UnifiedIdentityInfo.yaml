@@ -7,7 +7,7 @@ Category: Microsoft Sentinel Parser
 FunctionName: UnifiedIdentityInfo
 FunctionAlias: UnifiedIdentityInfo
 FunctionQuery: |
-    // Function to get privileged users from IdentityInfo and privileged workloads from WorkloadIdentityInfo
+    // Function to get a list of all non-privileged and privileged users but also workload identities
     let SensitiveEntraDirectoryRoles = externaldata(RoleName: string, RoleId: string, isPrivileged: bool, Classification: dynamic)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_EntraIdDirectoryRoles.json"] with(format='multijson')
     | where Classification.EAMTierLevelName != "Unclassified"
     | project RoleName, isPrivileged, Classification;
