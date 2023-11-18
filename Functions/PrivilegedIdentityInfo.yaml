@@ -4,8 +4,8 @@ Function:
   Version: '1.0.0'
   LastUpdated: '2023-11-11'
 Category: Microsoft Sentinel Parser
-FunctionName: AllPrivilegedIdentityInfo
-FunctionAlias: AllPrivilegedIdentityInfo
+FunctionName: PrivilegedIdentityInfo
+FunctionAlias: PrivilegedIdentityInfo
 FunctionQuery: |
     // Function to get privileged users from IdentityInfo and privileged workloads from WorkloadIdentityInfo
     let SensitiveEntraDirectoryRoles = externaldata(RoleName: string, RoleId: string, isPrivileged: bool, Classification: dynamic)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_EntraIdDirectoryRoles.json"] with(format='multijson')
@@ -27,7 +27,7 @@ FunctionQuery: |
         OnPremSynchronized,
         tostring(Classification),
         EntraIdRoles = RoleAssignments;
-    let PrivilegedWorkloads = WorkloadIdentityInfo
+    let PrivilegedWorkloads = PrivilegedWorkloadIdentityInfo
     | where isnotempty(EntraIdRoles) or isnotempty(AppRolePermissions)
     | project
         ObjectId = tostring(ServicePrincipalObjectId),

@@ -1,0 +1,52 @@
+id: 94a61b2d-bf7e-4255-8003-c9722ce1d6c9
+Function:
+  Title: Parser for to get a list of all non-privileged and privileged users but also workload identities
+  Version: '1.0.0'
+  LastUpdated: '2023-11-11'
+Category: Microsoft Sentinel Parser
+FunctionName: UnifiedIdentityInfo
+FunctionAlias: UnifiedIdentityInfo
+FunctionQuery: |
+    // Function to get privileged users from IdentityInfo and privileged workloads from WorkloadIdentityInfo
+    let SensitiveEntraDirectoryRoles = externaldata(RoleName: string, RoleId: string, isPrivileged: bool, Classification: dynamic)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_EntraIdDirectoryRoles.json"] with(format='multijson')
+    | where Classification.EAMTierLevelName != "Unclassified"
+    | project RoleName, isPrivileged, Classification;
+    let SensitiveUsers = IdentityInfo
+    | where TimeGenerated > ago(14d)
+    | summarize arg_max(TimeGenerated, *) by AccountObjectId
+    | mv-expand AssignedRoles
+    | extend RoleName = tostring(AssignedRoles)
+    | join kind=inner ( SensitiveEntraDirectoryRoles ) on RoleName
+    | summarize Classification = make_set(parse_json(Classification.EAMTierLevelName)), RoleAssignments = make_set(RoleName) by AccountObjectId, AccountDisplayName, OnPremisesAccountObjectId;
+    let PrivilegedUsers = SensitiveUsers
+    | extend OnPremSynchronized = iff(isnotempty(OnPremisesAccountObjectId), "true", "false")
+    | project
+        ObjectId = tostring(AccountObjectId),
+        ObjectType = "User",
+        ObjectDisplayName = AccountDisplayName,
+        OnPremSynchronized,
+        tostring(Classification),
+        EntraIdRoles = RoleAssignments;
+    let AllUsers = IdentityInfo
+    | where TimeGenerated > ago(14d)
+    | summarize arg_max(TimeGenerated, *) by AccountObjectId
+    | extend ObjectId = tostring(AccountObjectId)
+    | join kind=leftanti ( PrivilegedUsers ) on ObjectId
+    | extend DefaultPermissionClassification = "UserAccess"
+    | extend OnPremSynchronized = iff(isnotempty(OnPremisesAccountObjectId), "true", "false")
+    | summarize Classification = tostring(make_set(DefaultPermissionClassification)) by
+        ObjectId,
+        ObjectType = "User",
+        ObjectDisplayName = AccountDisplayName,
+        OnPremSynchronized;
+    let PrivilegedWorkloads = PrivilegedWorkloadIdentityInfo
+    | where isnotempty(EntraIdRoles) or isnotempty(AppRolePermissions)
+    | project
+        ObjectId = tostring(ServicePrincipalObjectId),
+        ObjectType = WorkloadIdentityType,
+        ObjectDisplayName = WorkloadIdentityName,
+        OnPremSynchronized = "false",
+        Classification = tostring(EnterpriseAccessModelTiering),
+        EntraIdRoles = EntraIdRoles,
+        AppRoles = AppRolePermissions;
+    union AllUsers, PrivilegedUsers, PrivilegedWorkloads
