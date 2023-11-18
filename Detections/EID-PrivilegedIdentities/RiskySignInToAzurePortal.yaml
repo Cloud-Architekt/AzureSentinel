@@ -22,6 +22,8 @@ query: |
   union AADNonInteractiveUserSignInLogs, SigninLogs
   | where ConditionalAccessStatus == "notApplied" and ResultType == "0"
   | where RiskLevelDuringSignIn != "none" or RiskLevelAggregated != "none"
+  // Azure Portal: c44b4083-3bb0-49c1-b47d-974e53cbdf3c
+  | where AppId in ("c44b4083-3bb0-49c1-b47d-974e53cbdf3c")
   | project timestamp = TimeGenerated, AccountCustomEntity = UserPrincipalName, IPCustomEntity = IPAddress, AppDisplayName, RiskLevelDuringSignIn, RiskLevelAggregated, RiskDetail, RiskState, IsRisky, OriginalRequestId
 entityMappings:
   - entityType: Account
