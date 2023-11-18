@@ -4,14 +4,14 @@ version: 1.0.0
 kind: Scheduled
 description: This analytic rule is creating an incident from MDA App Governance with Entity Mapping to Cloud Application and other enrichments from the original event in the SecurityAlert.
 severity: Medium
-queryFrequency: 4h
-queryPeriod: 4h
+queryFrequency: 1h
+queryPeriod: 1h
 triggerOperator: gt
 triggerThreshold: 0
 query: |+
   SecurityAlert
   | where ProductName == "Microsoft Application Protection"
-  | where TimeGenerated > ago(15d)
+  | where TimeGenerated > ago(1h)
   | extend CloudAppUrl = parse_url(Description)
   | extend CloudAppUrlParam = parse_json(tostring(CloudAppUrl.["Query Parameters"])).oauthAppId
   | extend AppId = tostring(toguid(CloudAppUrlParam))
@@ -19,31 +19,46 @@ query: |+
   | extend AlertDisplayName = tostring(DisplayName)
   | join kind=inner (
       PrivilegedWorkloadIdentityInfo
-      | project WorkloadIdentityName, WorkloadIdentityType, IsFirstPartyApp, AppId = tostring(ApplicationId), tostring(ServicePrincipalObjectId), EnterpriseAccessModelTiering, EntraIdRoles, AppRolePermissions
-      ) on AppId
+      | project
+          WorkloadIdentityName,
+          WorkloadIdentityType,
+          IsFirstPartyApp,
+          AppId = tostring(ApplicationId),
+          tostring(ServicePrincipalObjectId),
+          EnterpriseAccessModelTiering,
+          EntraIdRoles,
+          AppRolePermissions
+      )
+      on AppId
   | join kind=inner (
       SecurityIncident
-      | mv-expand AlertIds | extend SystemAlertId = tostring(AlertIds)
+      | mv-expand AlertIds
+      | extend SystemAlertId = tostring(AlertIds)
       | summarize arg_max(TimeGenerated, *) by SystemAlertId
-      | project SystemAlertId, IncidentUrl = AdditionalData.providerIncidentUrl, IncidentStatus = Status, IncidentName = IncidentNumber
-      ) on SystemAlertId
+      | project
+          SystemAlertId,
+          IncidentUrl = AdditionalData.providerIncidentUrl,
+          IncidentStatus = Status,
+          IncidentName = IncidentNumber
+      )
+      on SystemAlertId
 
 suppressionEnabled: false
 incidentConfiguration:
   createIncident: true
   groupingConfiguration:
-    enabled: false
+    enabled: true
     reopenClosedIncident: false
-    lookbackDuration: 5h
+    lookbackDuration: 4h
     matchingMethod: AllEntities
     groupByEntities: []
     groupByAlertDetails: []
     groupByCustomDetails: []
 eventGroupingSettings:
-  aggregationKind: SingleAlert
+  aggregationKind: AlertPerResult
 alertDetailsOverride:
-  alertDisplayNameFormat: '{{AlertName}} '
-  alertDescriptionFormat: '{{Description}} '
+  alertDisplayNameFormat: '{{AlertName}}  '
+  alertDescriptionFormat: '{{Description}}  '
   alertTacticsColumnName: Tactics
   alertSeverityColumnName: AlertSeverity
   alertDynamicProperties:
@@ -58,6 +73,8 @@ alertDetailsOverride:
 customDetails:
   WorkloadIdentityName: WorkloadIdentityName
   WorkloadIdentityType: WorkloadIdentityType
+  ServicePrincipalId: ServicePrincipalObjectId
+  ApplicationId: AppId    
   IsFirstPartyApp: IsFirstPartyApp
   PrivilegedAccess: EnterpriseAccessModelTiering
   EntraDirectoryRoles: EntraIdRoles

@@ -18,9 +18,9 @@
                 "description": "This analytic rule is creating an incident from MDA App Governance with Entity Mapping to Cloud Application and other enrichments from the original event in the SecurityAlert.",
                 "severity": "Medium",
                 "enabled": true,
-                "query": "SecurityAlert\n| where ProductName == \"Microsoft Application Protection\"\n| where TimeGenerated > ago(15d)\n| extend CloudAppUrl = parse_url(Description)\n| extend CloudAppUrlParam = parse_json(tostring(CloudAppUrl.[\"Query Parameters\"])).oauthAppId\n| extend AppId = tostring(toguid(CloudAppUrlParam))\n| extend Category = tostring(parse_json(ExtendedProperties).Category)\n| extend AlertDisplayName = tostring(DisplayName)\n| join kind=inner (\n    PrivilegedWorkloadIdentityInfo\n    | project WorkloadIdentityName, WorkloadIdentityType, IsFirstPartyApp, AppId = tostring(ApplicationId), tostring(ServicePrincipalObjectId), EnterpriseAccessModelTiering, EntraIdRoles, AppRolePermissions\n    ) on AppId\n| join kind=inner (\n    SecurityIncident\n    | mv-expand AlertIds | extend SystemAlertId = tostring(AlertIds)\n    | summarize arg_max(TimeGenerated, *) by SystemAlertId\n    | project SystemAlertId, IncidentUrl = AdditionalData.providerIncidentUrl, IncidentStatus = Status, IncidentName = IncidentNumber\n    ) on SystemAlertId\n\n",
-                "queryFrequency": "PT4H",
-                "queryPeriod": "PT4H",
+                "query": "SecurityAlert\n| where ProductName == \"Microsoft Application Protection\"\n| where TimeGenerated > ago(15d)\n| extend CloudAppUrl = parse_url(Description)\n| extend CloudAppUrlParam = parse_json(tostring(CloudAppUrl.[\"Query Parameters\"])).oauthAppId\n| extend AppId = tostring(toguid(CloudAppUrlParam))\n| extend Category = tostring(parse_json(ExtendedProperties).Category)\n| extend AlertDisplayName = tostring(DisplayName)\n| join kind=inner (\n    PrivilegedWorkloadIdentityInfo\n    | project\n        WorkloadIdentityName,\n        WorkloadIdentityType,\n        IsFirstPartyApp,\n        AppId = tostring(ApplicationId),\n        tostring(ServicePrincipalObjectId),\n        EnterpriseAccessModelTiering,\n        EntraIdRoles,\n        AppRolePermissions\n    )\n    on AppId\n| join kind=inner (\n    SecurityIncident\n    | mv-expand AlertIds\n    | extend SystemAlertId = tostring(AlertIds)\n    | summarize arg_max(TimeGenerated, *) by SystemAlertId\n    | project\n        SystemAlertId,\n        IncidentUrl = AdditionalData.providerIncidentUrl,\n        IncidentStatus = Status,\n        IncidentName = IncidentNumber\n    )\n    on SystemAlertId\n\n",
+                "queryFrequency": "PT1H",
+                "queryPeriod": "PT1H",
                 "triggerOperator": "GreaterThan",
                 "triggerThreshold": 0,
                 "suppressionDuration": "PT5H",
@@ -32,7 +32,7 @@
                 "incidentConfiguration": {
                     "createIncident": true,
                     "groupingConfiguration": {
-                        "enabled": false,
+                        "enabled": true,
                         "reopenClosedIncident": false,
                         "lookbackDuration": "PT5H",
                         "matchingMethod": "AllEntities",
@@ -42,7 +42,7 @@
                     }
                 },
                 "eventGroupingSettings": {
-                    "aggregationKind": "SingleAlert"
+                    "aggregationKind": "AlertPerResult"
                 },
                 "alertDetailsOverride": {
                     "alertDisplayNameFormat": "{{AlertName}}  ",
@@ -71,6 +71,8 @@
                 "customDetails": {
                     "WorkloadIdentityName": "WorkloadIdentityName",
                     "WorkloadIdentityType": "WorkloadIdentityType",
+                    "ServicePrincipalId": "ServicePrincipalObjectId",
+                    "ApplicationId": "AppId",                                        
                     "IsFirstPartyApp": "IsFirstPartyApp",
                     "PrivilegedAccess": "EnterpriseAccessModelTiering",
                     "EntraDirectoryRoles": "EntraIdRoles",

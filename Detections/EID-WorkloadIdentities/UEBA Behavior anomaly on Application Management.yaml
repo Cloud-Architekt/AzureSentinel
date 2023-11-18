@@ -9,7 +9,7 @@ description: |-
 
   The incident will be increased to “High” severity if the Actor has been assigned to “Control Plane” Entra ID role in the past 14 days. All other results will be set to severity “Informational” and not included in the incident creation.
 severity: Medium
-queryFrequency: 14d
+queryFrequency: 1h
 queryPeriod: 14d
 triggerOperator: gt
 triggerThreshold: 0
@@ -33,7 +33,7 @@ query: |
           PastRiskState = make_set(RiskState)
           by UserId = AccountObjectId, UserPrincipalName = AccountUPN, IsAccountEnabled;
   BehaviorAnalytics
-  | where TimeGenerated > ago(1d)
+  | where TimeGenerated > ago(1h)
   | where ActivityType == "ApplicationManagement"
   | join kind=inner (AllUsers) on UserPrincipalName
   // Increase severity if investigation priority is larger than 1 and risk on level Medium or High has been detected by the user in the past 14 days or user has no privileged directory role in the past or 

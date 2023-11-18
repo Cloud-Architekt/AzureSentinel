@@ -4,8 +4,8 @@ version: 1.0.0
 kind: Scheduled
 description: This analytic rule is creating an incident from Workload ID Protection with Entity Mapping to Cloud Application and other enrichments from the original event in the SecurityAlert.
 severity: Medium
-queryFrequency: 4h
-queryPeriod: 4h
+queryFrequency: 1h
+queryPeriod: 1h
 triggerOperator: gt
 triggerThreshold: 0
 query: |+
@@ -60,7 +60,7 @@ suppressionEnabled: false
 incidentConfiguration:
   createIncident: true
   groupingConfiguration:
-    enabled: false
+    enabled: true
     reopenClosedIncident: false
     lookbackDuration: 5h
     matchingMethod: AllEntities
@@ -68,7 +68,7 @@ incidentConfiguration:
     groupByAlertDetails: []
     groupByCustomDetails: []
 eventGroupingSettings:
-  aggregationKind: SingleAlert
+  aggregationKind: AlertPerResult
 alertDetailsOverride:
   alertDisplayNameFormat: '{{AlertName}}'
   alertDescriptionFormat: '{{DetailedDescription}}'
@@ -86,6 +86,8 @@ alertDetailsOverride:
 customDetails:
   WorkloadIdentityName: WorkloadIdentityName
   WorkloadIdentityType: WorkloadIdentityType
+  ServicePrincipalId: ServicePrincipalObjectId
+  ApplicationId: ApplicationId
   IsFirstPartyApp: IsFirstPartyApp
   PrivilegedAccess: EnterpriseAccessModelTiering
   EntraDirectoryRoles: EntraIdRoles
