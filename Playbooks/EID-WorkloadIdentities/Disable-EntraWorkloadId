@@ -1,0 +1,176 @@
+{
+    "definition": {
+        "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+        "actions": {
+            "For_each_Alert": {
+                "actions": {
+                    "For_each_ServicePrincipalId_in_Array_from_Custom_Detail": {
+                        "actions": {
+                            "Check_Conditions_of_Service_Principal": {
+                                "actions": {
+                                    "Add_comment_-_confirm_compromised_SP_to_incident": {
+                                        "inputs": {
+                                            "body": {
+                                                "incidentArmId": "@triggerBody()?['object']?['id']",
+                                                "message": "<p>Service Principal with ObjectId \"@{items('For_each_ServicePrincipalId_in_Array_from_Custom_Detail')}\" <span style=\"color: rgb(65,168,95)\"><strong>has been disabled</strong></span> as via playbook</p>"
+                                            },
+                                            "host": {
+                                                "connection": {
+                                                    "name": "@parameters('$connections')['DisableEntraWorkloadIdMSI']['connectionId']"
+                                                }
+                                            },
+                                            "method": "post",
+                                            "path": "/Incidents/Comment"
+                                        },
+                                        "runAfter": {
+                                            "Microsoft_Graph_API_-_PATCH_accountEnabled_on_ServicePrincipals": [
+                                                "Succeeded"
+                                            ]
+                                        },
+                                        "type": "ApiConnection"
+                                    },
+                                    "Microsoft_Graph_API_-_PATCH_accountEnabled_on_ServicePrincipals": {
+                                        "inputs": {
+                                            "authentication": {
+                                                "audience": "https://graph.microsoft.com",
+                                                "type": "ManagedServiceIdentity"
+                                            },
+                                            "body": {
+                                                "accountEnabled": false
+                                            },
+                                            "method": "PATCH",
+                                            "uri": "https://graph.microsoft.com/v1.0/servicePrincipals/@{items('For_each_ServicePrincipalId_in_Array_from_Custom_Detail')}"
+                                        },
+                                        "runAfter": {},
+                                        "type": "Http"
+                                    }
+                                },
+                                "else": {
+                                    "actions": {
+                                        "Add_comment_-_no_action_on_SP_to_incident": {
+                                            "inputs": {
+                                                "body": {
+                                                    "incidentArmId": "@triggerBody()?['object']?['id']",
+                                                    "message": "<p>Service Principal with ObjectId \"@{items('For_each_ServicePrincipalId_in_Array_from_Custom_Detail')}\" <span style=\"color: rgb(184,49,47)\"><strong>has not been</strong></span> disabled via playbook</p>"
+                                                },
+                                                "host": {
+                                                    "connection": {
+                                                        "name": "@parameters('$connections')['DisableEntraWorkloadIdMSI']['connectionId']"
+                                                    }
+                                                },
+                                                "method": "post",
+                                                "path": "/Incidents/Comment"
+                                            },
+                                            "runAfter": {},
+                                            "type": "ApiConnection"
+                                        }
+                                    }
+                                },
+                                "expression": {
+                                    "and": [
+                                        {
+                                            "not": {
+                                                "equals": [
+                                                    "@items('For_each_ServicePrincipalId_in_Array_from_Custom_Detail')",
+                                                    "@null"
+                                                ]
+                                            }
+                                        }
+                                    ]
+                                },
+                                "runAfter": {},
+                                "type": "If"
+                            }
+                        },
+                        "foreach": "@body('Parse_JSON_-_Custom_Details_from_Alert')?['ServicePrincipalId']",
+                        "runAfter": {
+                            "Parse_JSON_-_Custom_Details_from_Alert": [
+                                "Succeeded"
+                            ]
+                        },
+                        "type": "Foreach"
+                    },
+                    "Parse_JSON_-_Custom_Details_from_Alert": {
+                        "inputs": {
+                            "content": "@items('For_each_Alert')?['properties']?['additionalData']?['Custom Details']",
+                            "schema": {
+                                "properties": {
+                                    "IsFirstPartyApp": {
+                                        "items": {
+                                            "type": "string"
+                                        },
+                                        "type": "array"
+                                    },
+                                    "ServicePrincipalId": {
+                                        "items": {
+                                            "type": "string"
+                                        },
+                                        "type": "array"
+                                    },
+                                    "WorkloadIdentityName": {
+                                        "items": {
+                                            "type": "string"
+                                        },
+                                        "type": "array"
+                                    },
+                                    "WorkloadIdentityType": {
+                                        "items": {
+                                            "type": "string"
+                                        },
+                                        "type": "array"
+                                    }
+                                },
+                                "type": "object"
+                            }
+                        },
+                        "runAfter": {},
+                        "type": "ParseJson"
+                    }
+                },
+                "foreach": "@triggerBody()?['object']?['properties']?['Alerts']",
+                "runAfter": {},
+                "type": "Foreach"
+            }
+        },
+        "contentVersion": "1.0.0.0",
+        "outputs": {},
+        "parameters": {
+            "$connections": {
+                "defaultValue": {},
+                "type": "Object"
+            }
+        },
+        "triggers": {
+            "Microsoft_Sentinel_incident": {
+                "inputs": {
+                    "body": {
+                        "callback_url": "@{listCallbackUrl()}"
+                    },
+                    "host": {
+                        "connection": {
+                            "name": "@parameters('$connections')['DisableEntraWorkloadIdMSI']['connectionId']"
+                        }
+                    },
+                    "path": "/incident-creation"
+                },
+                "type": "ApiConnectionWebhook"
+            }
+        }
+    },
+    "parameters": {
+        "$connections": {
+            "value": {
+                "DisableEntraWorkloadIdMSI": {
+                    "connectionId": "/subscriptions/YourSubscriptionId/resourceGroups/YourResourceGroupName/providers/Microsoft.Web/connections/Disable-EntraWorkloadId-MSI",
+                    "connectionName": "Disable-EntraWorkloadId-MSI",
+                    "connectionProperties": {
+                        "authentication": {
+                            "type": "ManagedServiceIdentity"
+                        }
+                    },
+                    "id": "/subscriptions/YourSubscriptionId/providers/Microsoft.Web/locations/YourLocation/managedApis/azuresentinel"
+                }
+            }
+        }
+    }
+}
