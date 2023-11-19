@@ -1,0 +1,132 @@
+id: 8cd003d2-7a8b-4eba-b50a-39287757120d
+name: Added Ownership to workload identity (WorkloadIdentityInfo)
+version: 1.0.0
+kind: Scheduled
+description: 'Detects changes to the ownership of application and service principal. Alert will be increased to high if assigned owner is unprivileged or lower privileged. Monitor these changes to avoid privileged escalation paths and breach of tiering model. Avoid using ownership and assign delegated permissions by using object- and permission-scoped Entra ID roles (based on your requirements). Ref: https://docs.microsoft.com/azure/active-directory/fundamentals/security-operations-applications#new-owner'
+severity: Medium
+queryFrequency: 1h
+queryPeriod: 1h
+triggerOperator: gt
+triggerThreshold: 0
+tactics:
+- Persistence
+- PrivilegeEscalation
+relevantTechniques:
+- T1078
+query: |+
+  AuditLogs
+  | where OperationName in ("Add owner to application", "Add owner to service principal")
+  | extend InitiatingUserOrApp = iff(isnotempty(InitiatedBy.user.userPrincipalName), tostring(InitiatedBy.user.userPrincipalName), tostring(InitiatedBy.app.displayName))
+  | extend InitiatingUserOrAppId = iff(isnotempty(InitiatedBy.user.id), tostring(InitiatedBy.user.id), tostring(InitiatedBy.app.id))
+  | extend InitiatingIpAddress = iff(isnotempty(InitiatedBy.user.ipAddress), tostring(InitiatedBy.user.ipAddress), tostring(InitiatedBy.app.ipAddress))
+  | mv-expand TargetResources 
+  | mv-expand TargetResources.modifiedProperties
+  | where TargetResources_modifiedProperties.displayName == "Application.AppId" or TargetResources_modifiedProperties.displayName == "ServicePrincipal.AppId"
+  | extend ApplicationId = replace_string(tostring(TargetResources_modifiedProperties.newValue), '"', '')
+  | extend AddedOwnerId = tostring(TargetResources.id)
+  | join kind=leftouter(
+      PrivilegedWorkloadIdentityInfo
+      | project
+          WorkloadIdentityName,
+          WorkloadIdentityType,
+          ApplicationObjectId,
+          ServicePrincipalObjectId,
+          ApplicationId,
+          IsFirstPartyApp,
+          EntraIdRoles,
+          AppRolePermissions,
+          WorkloadIdClassification = EnterpriseAccessModelTiering
+      )
+      on ApplicationId
+  | join kind=leftouter (
+      UnifiedIdentityInfo
+      | project ObjectId, InitiatingUserOrAppClassification = Classification
+      )
+      on $left.InitiatingUserOrAppId == $right.ObjectId
+  | join kind=leftouter (
+      UnifiedIdentityInfo
+      | project
+          AddedOwnerClassification = Classification,
+          AddedOwnerDisplayName = ObjectDisplayName,
+          ObjectId
+      )
+      on $left.AddedOwnerId == $right.ObjectId
+  // Compare Classification of Application with Owner to detect "Tiering" breach, Allowlist all Control Plane roles 
+  | extend TieringBreach = iff(parse_json(tostring(parse_json(AddedOwnerClassification))) !contains WorkloadIdClassification and (parse_json(tostring(parse_json(AddedOwnerClassification))) !contains "ControlPlane"), "True", "False")
+  | extend Severity = iff(TieringBreach == "True", "High", "Medium")
+  | extend OperationAlertTitle = replace_string(OperationName,"Add ","")
+  | project
+      TimeGenerated,
+      OperationName,
+      OperationAlertTitle,
+      WorkloadIdentityName,
+      WorkloadIdentityType,
+      WorkloadIdClassification,
+      ApplicationObjectId,
+      ApplicationId,
+      ServicePrincipalObjectId,
+      InitiatingUserOrApp,
+      InitiatingUserOrAppId,
+      InitiatingIpAddress,
+      AddedOwnerId,
+      AddedOwnerClassification,
+      AddedOwnerDisplayName,
+      EntraIdRoles,
+      AppRolePermissions,
+      IsFirstPartyApp,
+      TieringBreach,
+      Severity
+
+suppressionEnabled: false
+incidentConfiguration:
+  createIncident: true
+  groupingConfiguration:
+    enabled: true
+    reopenClosedIncident: false
+    lookbackDuration: 5h
+    matchingMethod: AllEntities
+    groupByEntities: []
+    groupByAlertDetails: []
+    groupByCustomDetails: []
+eventGroupingSettings:
+  aggregationKind: AlertPerResult
+alertDetailsOverride:
+  alertDisplayNameFormat: 'Added {{OperationAlertTitle}} with privileges on {{WorkloadIdClassification}} '
+  alertDescriptionFormat: |-
+    {{AddedOwnerClassification}} user has been added as owner to {{WorkloadIdentityName}} with privileges on {{WorkloadIdClassification}}. Avoid using ownership and assign delegated permissions by using object- and permission-scoped Entra ID roles (based on your requirements). Verify the assignment to prevent tiering breach and permanent privileged access to a workload identity.
+      Ref: https://docs.microsoft.com/azure/active-directory/fundamentals/security-operations-applications#new-owner
+  alertSeverityColumnName: Severity
+  alertDynamicProperties: []
+customDetails:
+  WorkloadIdentityName: WorkloadIdentityName
+  WorkloadIdentityType: WorkloadIdentityType
+  ServicePrincipalId: ServicePrincipalObjectId
+  ApplicationId: ApplicationId
+  IsFirstPartyApp: IsFirstPartyApp
+  PrivilegedAccess: WorkloadIdClassification
+  EntraDirectoryRoles: EntraIdRoles
+  MSGraphRoles: AppRolePermissions
+  TieringBreach: TieringBreach
+entityMappings:
+- entityType: Account
+  fieldMappings:
+  - identifier: AadUserId
+    columnName: InitiatingUserOrAppId
+- entityType: Account
+  fieldMappings:
+  - identifier: AadUserId
+    columnName: AddedOwnerId
+- entityType: CloudApplication
+  fieldMappings:
+  - identifier: AppId
+    columnName: ApplicationId
+- entityType: CloudApplication
+  fieldMappings:
+  - identifier: Name
+    columnName: WorkloadIdentityName
+- entityType: IP
+  fieldMappings:
+  - identifier: Address
+    columnName: InitiatingIpAddress
+suppressionDuration: 5h
+
