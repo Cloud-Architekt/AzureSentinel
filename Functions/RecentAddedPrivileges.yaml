@@ -1,0 +1,60 @@
+id: 87770afa-b48b-4aea-b055-4bc48d805260
+Function:
+  Title: Function to get a list of all classified and privileged Entra ID or App Roles that has been assigned in the last 24 hours.
+  Version: '1.0.0'
+  LastUpdated: '2023-11-11'
+Category: Microsoft Sentinel Parser
+FunctionName: RecentAddedPrivileges
+FunctionAlias: RecentAddedPrivileges
+FunctionQuery: |
+  let SensitiveMsGraphPermissions = externaldata(EAMTierLevelName: string, Category: string, AppRoleDisplayName: string)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_AppRoles.json"] with(format='multijson');
+  let SensitiveEntraDirectoryRoles = externaldata(Classification: string, RolePermissions: string, Category: string, RoleId: string, RoleName: string)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_EntraIdDirectoryRoles.json"] with(format='multijson') | mv-expand parse_json(RolePermissions)
+  | summarize Category = make_list(RolePermissions.Category) by RoleId, RoleName, Classification = tostring(parse_json(Classification).EAMTierLevelName);
+  let AddedSensitiveApiPermissions = AuditLogs
+      | where TimeGenerated >ago(1d)
+      | where LoggedByService =~ "Core Directory"
+      | where Category =~ "ApplicationManagement"
+      | where AADOperationType =~ "Assign"  
+      | where OperationName == "Add app role assignment to service principal"
+      | where Result =~ "success"
+      | mv-expand TargetResources
+      | mv-expand TargetResources.modifiedProperties
+      | extend displayName_ = tostring(TargetResources_modifiedProperties.displayName)
+      | where displayName_ =~ "AppRole.Value"
+      | extend AppRole = tostring(parse_json(tostring(TargetResources_modifiedProperties.newValue)))
+      | extend AddedPermission = replace_string(tostring(TargetResources_modifiedProperties.newValue),'"','')
+      | join kind=inner ( SensitiveMsGraphPermissions | project AddedPermissionClassification = EAMTierLevelName, AddedPermissionCategory = Category, AppRoleDisplayName ) on $left.AddedPermission == $right.AppRoleDisplayName
+      | mv-expand TargetResources.modifiedProperties | where TargetResources_modifiedProperties.displayName == "ServicePrincipal.ObjectID" | extend PrivilegedIdentityObjectId = replace_string(tostring(TargetResources_modifiedProperties.newValue),'"','')
+      | mv-expand TargetResources.modifiedProperties | where TargetResources_modifiedProperties.displayName == "ServicePrincipal.DisplayName" | extend PrivilegedIdentityName = replace_string(tostring(TargetResources_modifiedProperties.newValue),'"','')
+      | extend PrivilegedIdentityType = "ServicePrincipal"
+      | extend PrivilegedAssignmentType = "AppRole"
+      | summarize EnterpriseAccessModelTiering = make_set(AddedPermissionClassification), AssignedPrivileges = make_set(AddedPermission), CorrelationId = make_set(CorrelationId) by PrivilegedIdentityName, PrivilegedIdentityObjectId, PrivilegedIdentityType, PrivilegedAssignmentType;
+  let AddedSensitiveDirectoryRoles = AuditLogs
+  | where TimeGenerated >ago(1d)
+      | where Category =~ "RoleManagement"
+      | where AADOperationType in ("Assign", "AssignEligibleRole")
+      | where ActivityDisplayName has_any ("Add eligible member to role", "Add member to role")
+      | where ( InitiatedBy.app.displayName != "MS-PIM" or OperationName == "Add eligible member to role" )
+      | mv-apply TargetResource = TargetResources on
+        (
+          where TargetResource.type in~ ("User", "ServicePrincipal", "Group")
+          | extend RoleAssignment = TargetResource.modifiedProperties
+          | extend PrivilegedIdentityObjectId = tostring(TargetResource.id)
+          | extend TargetName = iff(TargetResource.type !~ "User", tostring(TargetResource.displayName), tostring(TargetResource.userPrincipalName))
+          | extend PrivilegedIdentityType = tostring(TargetResource.type)
+        )
+      // Name of user is not included in audit log, lookup to UnifiedIdentityInfo table for enrichment
+      | join kind=leftouter ( UnifiedIdentityInfo | project ObjectId, ObjectDisplayName ) on $left.PrivilegedIdentityObjectId == $right.ObjectId
+      // Name of user is not included in audit log, using ObjectDisplayName from UnifiedIdentityInfo table
+      | extend PrivilegedIdentityName = iff(TargetResource.type =~ "User", ObjectDisplayName, TargetName)
+      | mv-apply Property = RoleAssignment on
+        (
+          where Property.displayName =~ "Role.TemplateId"
+          | extend RoleId = trim('"', tostring(Property.newValue))
+        )
+      | where Result == "success"
+      | join kind=inner ( SensitiveEntraDirectoryRoles | project AddedRoleClassification = Classification, Category = Category, RoleId, RoleName ) on RoleId
+      | extend PrivilegedAssignmentType = "DirectoryRole"
+      | summarize EnterpriseAccessModelTiering = make_set(AddedRoleClassification), CorrelationId = make_set(CorrelationId), AssignedPrivileges = make_set(RoleName) by PrivilegedIdentityName, PrivilegedIdentityObjectId, PrivilegedIdentityType, PrivilegedAssignmentType;
+  union AddedSensitiveApiPermissions, AddedSensitiveDirectoryRoles
+  | summarize PrivilegedAssignmentType = make_set(PrivilegedAssignmentType), AssignedPrivileges = make_set(AssignedPrivileges), EnterpriseAccessModelTiering = make_set(EnterpriseAccessModelTiering), CorrelationId = make_set(CorrelationId) by PrivilegedIdentityName, PrivilegedIdentityObjectId, PrivilegedIdentityType
