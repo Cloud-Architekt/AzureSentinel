@@ -1,0 +1,69 @@
+id: 1e8dd897-2f78-4e17-8b81-b6fda4e1a968
+name: Token Replay from workload identity with privileges in Microsoft Azure (WorkloadIdentityInfo)
+version: 1.0.0
+kind: Scheduled
+description: Detected indicator of token replay attack by using the following pattern. A token has been used for activity on Azure resource(s) from a different IP address than during the sign-in process. Severity is set to "high" if activity IP address is not related to a service tag IP address range.
+severity: Medium
+queryFrequency: 1h
+queryPeriod: 1h
+triggerOperator: gt
+triggerThreshold: 0
+tactics:
+- Persistence
+- PrivilegeEscalation
+relevantTechniques:
+- T1078
+query: "  let azure_ranges = externaldata(changeNumber: string, cloud: string, values: dynamic)\r\n    [\"https://raw.githubusercontent.com/microsoft/mstic/master/PublicFeeds/MSFTIPRanges/ServiceTags_Public.json\"] with(format='multijson')\r\n    | mv-expand values\r\n    | mv-expand values.properties.addressPrefixes\r\n    | mv-expand values_properties_addressPrefixes\r\n    | summarize by tostring(values_properties_addressPrefixes)\r\n    | extend isipv4 = parse_ipv4(values_properties_addressPrefixes)\r\n    | extend isipv6 = parse_ipv6(values_properties_addressPrefixes)\r\n    | extend ip_type = case(isnotnull(isipv4), \"v4\", \"v6\")\r\n    | summarize make_list(values_properties_addressPrefixes) by ip_type;\r\nAzureActivity\r\n| where parse_json(tostring(Authorization_d.evidence)).principalType == \"ServicePrincipal\"\r\n| extend ClaimsObjectIdentifier = parse_json(Claims).[\"http://schemas.microsoft.com/identity/claims/objectidentifier\"] \r\n| extend parsedClaims = parse_json(Claims_d)\r\n| where CorrelationId == \"62fa9ae7-15e5-4bda-914b-16e891fa27ec\"\r\n| where ActivityStatusValue == \"Success\" and ActivitySubstatusValue == \"OK\"\r\n| project\r\n    TimeGenerated,\r\n    CorrelationId,\r\n    OperationName,\r\n    ResourceProviderValue,\r\n    _ResourceId,\r\n    ActivityIpAddress = CallerIpAddress,\r\n    ApplicationId = tostring(Claims_d.appid),\r\n    Uti = tostring(Claims_d.uti),\r\n    ActivityStatus\r\n| join kind=inner (union AADServicePrincipalSignInLogs, AADManagedIdentitySignInLogs\r\n    | project\r\n        ConditionalAccessPolicies,\r\n        ConditionalAccessStatus,\r\n        ServicePrincipalCredentialKeyId,\r\n        SignInIpAddress = IPAddress,\r\n        UniqueTokenIdentifier\r\n    )\r\n    on $left.Uti == $right.UniqueTokenIdentifier\r\n| where ActivityIpAddress != SignInIpAddress and SignInIpAddress != \"\"\r\n| extend isipv4 = parse_ipv4(ActivityIpAddress)\r\n| extend ip_type = case(isnotnull(isipv4), \"v4\", \"v6\")\r\n| join kind=fullouter (azure_ranges) on ip_type\r\n| extend ipv6_match = ipv6_is_in_any_range(ActivityIpAddress, list_values_properties_addressPrefixes)\r\n| extend ipv4_match = ipv4_is_in_any_range(ActivityIpAddress, list_values_properties_addressPrefixes)\r\n| extend IpAddressType = iff(ipv4_match or ipv6_match, \"Azure Public IP\", \"None Azure IP\")\r\n| where isnotempty(ApplicationId)\r\n| join kind=leftouter(\r\n    PrivilegedWorkloadIdentityInfo\r\n    | project\r\n        WorkloadIdentityName,\r\n        WorkloadIdentityType,\r\n        ApplicationObjectId,\r\n        ServicePrincipalObjectId,\r\n        ApplicationId,\r\n        IsFirstPartyApp,\r\n        EntraIdRoles,\r\n        AppRolePermissions,\r\n        WorkloadIdClassification = EnterpriseAccessModelTiering\r\n    )\r\n    on ApplicationId\r\n| extend Severity = iff(IpAddressType != \"Azure Public IP\", \"High\", \"Medium\")    "
+suppressionEnabled: false
+incidentConfiguration:
+  createIncident: true
+  groupingConfiguration:
+    enabled: true
+    reopenClosedIncident: false
+    lookbackDuration: 5h
+    matchingMethod: Selected
+    groupByEntities:
+    - CloudApplication
+    groupByAlertDetails: []
+    groupByCustomDetails: []
+eventGroupingSettings:
+  aggregationKind: AlertPerResult
+alertDetailsOverride:
+  alertDisplayNameFormat: Token Replay from workload identity with privileges in Microsoft Azure
+  alertDescriptionFormat: Activity of {{WorkloadIdentityName}} from IPAddress {{ActivityIpAddress}} ({{IpAddressType}}) has been detected which is different than the IP address from sign-in event.
+  alertSeverityColumnName: Severity
+  alertDynamicProperties: []
+customDetails:
+  WorkloadIdentityName: WorkloadIdentityName
+  WorkloadIdentityType: WorkloadIdentityType
+  ServicePrincipalId: ServicePrincipalObjectId
+  ApplicationId: ApplicationId
+  CredentialKeyId: ServicePrincipalCredentialKeyId
+  IsFirstPartyApp: IsFirstPartyApp
+  PrivilegedAccess: WorkloadIdClassification
+  EntraDirectoryRoles: EntraIdRoles
+  MSGraphRoles: AppRolePermissions
+  ConditionalAccess: ConditionalAccessStatus
+entityMappings:
+- entityType: CloudApplication
+  fieldMappings:
+  - identifier: Name
+    columnName: WorkloadIdentityName
+- entityType: CloudApplication
+  fieldMappings:
+  - identifier: AppId
+    columnName: ApplicationId
+- entityType: IP
+  fieldMappings:
+  - identifier: Address
+    columnName: ActivityIpAddress
+- entityType: IP
+  fieldMappings:
+  - identifier: Address
+    columnName: SignInIpAddress
+- entityType: AzureResource
+  fieldMappings:
+  - identifier: ResourceId
+    columnName: _ResourceId
+suppressionDuration: 5h
+

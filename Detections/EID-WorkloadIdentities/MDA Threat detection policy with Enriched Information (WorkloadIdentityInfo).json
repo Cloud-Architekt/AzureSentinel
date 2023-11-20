@@ -1,0 +1,146 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "workspace": {
+            "type": "String"
+        }
+    },
+    "resources": [
+        {
+            "id": "[concat(resourceId('Microsoft.OperationalInsights/workspaces/providers', parameters('workspace'), 'Microsoft.SecurityInsights'),'/alertRules/3a2336d2-76e5-4365-a7ef-b8cfed604534')]",
+            "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/3a2336d2-76e5-4365-a7ef-b8cfed604534')]",
+            "type": "Microsoft.OperationalInsights/workspaces/providers/alertRules",
+            "kind": "Scheduled",
+            "apiVersion": "2022-11-01-preview",
+            "properties": {
+                "displayName": "MDA Threat detection policy with Enriched Information",
+                "description": "This analytic rule is creating an incident from MDA Threat detection policy with Entity Mapping to Cloud Application and other enrichments from the original event in the SecurityAlert.",
+                "severity": "Medium",
+                "enabled": true,
+                "query": "SecurityAlert\n| where ProductName == \"Microsoft Cloud App Security\" or ProductComponentName == \"Anubis\"\n| mv-expand parse_json(Entities) | where Entities.Type == \"oauth-application\"\n| extend AppId = tostring(Entities.OAuthAppId)\n| extend IpAddress = parse_json(ExtendedProperties).[\"IP Addresses\"]\n| extend RedirectUris = parse_json(tostring(Entities.RedirectURLs))\n| extend AlertDisplayName = tostring(DisplayName)\n| extend CommunityUse = tostring(Entities.CommunityUse)\n| extend Publisher = tostring(Entities.PublisherName)\n| join kind=inner (\n    PrivilegedWorkloadIdentityInfo\n    | project\n        WorkloadIdentityName,\n        WorkloadIdentityType,\n        IsFirstPartyApp,\n        AppId = tostring(ApplicationId),\n        tostring(ServicePrincipalObjectId),\n        EnterpriseAccessModelTiering,\n        EntraIdRoles,\n        AppRolePermissions\n    )\n    on AppId\n| join kind=inner (\n    SecurityIncident\n    | mv-expand AlertIds\n    | extend SystemAlertId = tostring(AlertIds)\n    | summarize arg_max(TimeGenerated, *) by SystemAlertId\n    | project\n        SystemAlertId,\n        IncidentUrl = AdditionalData.providerIncidentUrl,\n        IncidentStatus = Status,\n        IncidentName = IncidentNumber\n    )\n    on SystemAlertId\n\n",
+                "queryFrequency": "PT1H",
+                "queryPeriod": "PT1H",
+                "triggerOperator": "GreaterThan",
+                "triggerThreshold": 0,
+                "suppressionDuration": "PT5H",
+                "suppressionEnabled": false,
+                "startTimeUtc": null,
+                "tactics": [],
+                "techniques": [],
+                "alertRuleTemplateName": null,
+                "incidentConfiguration": {
+                    "createIncident": true,
+                    "groupingConfiguration": {
+                        "enabled": true,
+                        "reopenClosedIncident": false,
+                        "lookbackDuration": "PT5H",
+                        "matchingMethod": "AllEntities",
+                        "groupByEntities": [],
+                        "groupByAlertDetails": [],
+                        "groupByCustomDetails": []
+                    }
+                },
+                "eventGroupingSettings": {
+                    "aggregationKind": "AlertPerResult"
+                },
+                "alertDetailsOverride": {
+                    "alertDisplayNameFormat": "{{AlertName}}  ",
+                    "alertDescriptionFormat": "{{Description}}  ",
+                    "alertTacticsColumnName": "Tactics",
+                    "alertSeverityColumnName": "AlertSeverity",
+                    "alertDynamicProperties": [
+                        {
+                            "alertProperty": "AlertLink",
+                            "value": "AlertLink"
+                        },
+                        {
+                            "alertProperty": "Techniques",
+                            "value": "Techniques"
+                        },
+                        {
+                            "alertProperty": "ProviderName",
+                            "value": "ProviderName"
+                        },
+                        {
+                            "alertProperty": "RemediationSteps",
+                            "value": "RemediationSteps"
+                        },
+                        {
+                            "alertProperty": "ConfidenceLevel",
+                            "value": "ConfidenceLevel"
+                        },
+                        {
+                            "alertProperty": "ConfidenceScore",
+                            "value": "ConfidenceScore"
+                        },
+                        {
+                            "alertProperty": "ExtendedLinks",
+                            "value": "ExtendedLinks"
+                        },
+                        {
+                            "alertProperty": "ProductName",
+                            "value": "ProductName"
+                        },
+                        {
+                            "alertProperty": "ProductComponentName",
+                            "value": "ProductComponentName"
+                        }
+                    ]
+                },
+                "customDetails": {
+                    "WorkloadIdentityName": "WorkloadIdentityName",
+                    "WorkloadIdentityType": "WorkloadIdentityType",
+                    "ServicePrincipalId": "ServicePrincipalObjectId",
+                    "ApplicationId": "AppId",
+                    "IsFirstPartyApp": "IsFirstPartyApp",
+                    "PrivilegedAccess": "EnterpriseAccessModelTiering",
+                    "EntraDirectoryRoles": "EntraIdRoles",
+                    "MSGraphRoles": "AppRolePermissions",
+                    "CommunityUse": "CommunityUse",
+                    "Vendor": "Publisher"
+                },
+                "entityMappings": [
+                    {
+                        "entityType": "CloudApplication",
+                        "fieldMappings": [
+                            {
+                                "identifier": "AppId",
+                                "columnName": "AppId"
+                            }
+                        ]
+                    },
+                    {
+                        "entityType": "CloudApplication",
+                        "fieldMappings": [
+                            {
+                                "identifier": "Name",
+                                "columnName": "WorkloadIdentityName"
+                            }
+                        ]
+                    },
+                    {
+                        "entityType": "IP",
+                        "fieldMappings": [
+                            {
+                                "identifier": "Address",
+                                "columnName": "IpAddress"
+                            }
+                        ]
+                    },
+                    {
+                        "entityType": "URL",
+                        "fieldMappings": [
+                            {
+                                "identifier": "Url",
+                                "columnName": "RedirectUris"
+                            }
+                        ]
+                    }
+                ],
+                "sentinelEntitiesMappings": null,
+                "templateVersion": null
+            }
+        }
+    ]
+}

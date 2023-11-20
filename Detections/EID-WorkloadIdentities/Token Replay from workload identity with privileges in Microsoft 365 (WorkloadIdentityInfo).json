@@ -1,0 +1,118 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "workspace": {
+            "type": "String"
+        }
+    },
+    "resources": [
+        {
+            "id": "[concat(resourceId('Microsoft.OperationalInsights/workspaces/providers', parameters('workspace'), 'Microsoft.SecurityInsights'),'/alertRules/92824ea9-7f37-4bf9-b4bf-45e7c82a6b46')]",
+            "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/92824ea9-7f37-4bf9-b4bf-45e7c82a6b46')]",
+            "type": "Microsoft.OperationalInsights/workspaces/providers/alertRules",
+            "kind": "Scheduled",
+            "apiVersion": "2022-11-01-preview",
+            "properties": {
+                "displayName": "Token Replay from workload identity with privileges in Microsoft Entra or Microsoft 365 (WorkloadIdentityInfo)",
+                "description": "Detected indicator of token replay attack by using the following pattern. A token has been used for activity on Microsoft Graph API from a different IP address than during the sign-in process. Severity is set to \"high\" if workload identity has privileges on Control Plane.",
+                "severity": "Medium",
+                "enabled": true,
+                "query": "let azure_ranges = externaldata(changeNumber: string, cloud: string, values: dynamic)\r\n[\"https://raw.githubusercontent.com/microsoft/mstic/master/PublicFeeds/MSFTIPRanges/ServiceTags_Public.json\"] with(format='multijson')\r\n| mv-expand values\r\n| mv-expand values.properties.addressPrefixes\r\n| mv-expand values_properties_addressPrefixes\r\n| summarize by tostring(values_properties_addressPrefixes)\r\n| extend isipv4 = parse_ipv4(values_properties_addressPrefixes)\r\n| extend isipv6 = parse_ipv6(values_properties_addressPrefixes)\r\n| extend ip_type = case(isnotnull(isipv4), \"v4\", \"v6\")\r\n| summarize make_list(values_properties_addressPrefixes) by ip_type;\r\nMicrosoftGraphActivityLogs\r\n| project TimeGenerated, RequestId, ApiVersion, RequestMethod, ResponseStatusCode, ActivityIpAddress = IPAddress, UserAgent, RequestUri, Roles, AppId, Wids, SignInActivityId, ApplicationId = AppId, Scopes, Location\r\n| join kind=inner (union AADServicePrincipalSignInLogs, AADManagedIdentitySignInLogs\r\n  | project ConditionalAccessPolicies, ConditionalAccessStatus, ServicePrincipalCredentialKeyId, SignInIpAddress = IPAddress, UniqueTokenIdentifier, Type\r\n  // Correlation between Activity and Sign-in based on Unique Token Identifier\r\n) on $left.SignInActivityId == $right.UniqueTokenIdentifier\r\n// AADManagedIdentitySignInLogs does not include SignInIpAddress\r\n| where ActivityIpAddress != SignInIpAddress and isnotempty(SignInIpAddress)\r\n| extend isipv4 = parse_ipv4(ActivityIpAddress)\r\n| extend ip_type = case(isnotnull(isipv4), \"v4\", \"v6\")\r\n| join kind=fullouter (azure_ranges) on ip_type\r\n| extend ipv6_match = ipv6_is_in_any_range(ActivityIpAddress, list_values_properties_addressPrefixes)\r\n| extend ipv4_match = ipv4_is_in_any_range(ActivityIpAddress, list_values_properties_addressPrefixes)\r\n| extend IpAddressType = iff(ipv4_match or ipv6_match, \"Azure Public IP\", \"None Azure IP\")\r\n| where isnotempty(ApplicationId)\r\n| join kind=leftouter(\r\n    PrivilegedWorkloadIdentityInfo\r\n    | project\r\n        WorkloadIdentityName,\r\n        WorkloadIdentityType,\r\n        ApplicationObjectId,\r\n        ServicePrincipalObjectId,\r\n        ApplicationId,\r\n        IsFirstPartyApp,\r\n        EntraIdRoles,\r\n        AppRolePermissions,\r\n        WorkloadIdClassification = EnterpriseAccessModelTiering\r\n    )\r\n    on ApplicationId\r\n| extend Severity = iff(WorkloadIdClassification contains \"ControlPlane\", \"High\", \"Medium\")",
+                "queryFrequency": "PT1H",
+                "queryPeriod": "PT1H",
+                "triggerOperator": "GreaterThan",
+                "triggerThreshold": 0,
+                "suppressionDuration": "PT5H",
+                "suppressionEnabled": false,
+                "startTimeUtc": null,
+                "tactics": [
+                    "CredentialAccess"
+                ],
+                "techniques": [
+                    "T1528"
+                ],
+                "alertRuleTemplateName": null,
+                "incidentConfiguration": {
+                    "createIncident": true,
+                    "groupingConfiguration": {
+                        "enabled": true,
+                        "reopenClosedIncident": false,
+                        "lookbackDuration": "PT5H",
+                        "matchingMethod": "Selected",
+                        "groupByEntities": [
+                            "CloudApplication"
+                        ],
+                        "groupByAlertDetails": [],
+                        "groupByCustomDetails": []
+                    }
+                },
+                "eventGroupingSettings": {
+                    "aggregationKind": "AlertPerResult"
+                },
+                "alertDetailsOverride": {
+                    "alertDisplayNameFormat": "Token Replay from workload identity with {{WorkloadIdClassification}} privileges in Microsoft Entra or Microsoft 365",
+                    "alertDescriptionFormat": "Activity of {{WorkloadIdentityName}} from IPAddress ({{ActivityIpAddress}}) to Microsoft Graph API with privileges on {{WorkloadIdClassification}} has been detected which is different than the IP address from sign-in event.",
+                    "alertSeverityColumnName": "Severity",
+                    "alertDynamicProperties": []
+                },
+                "customDetails": {
+                    "WorkloadIdentityName": "WorkloadIdentityName",
+                    "WorkloadIdentityType": "WorkloadIdentityType",
+                    "ServicePrincipalId": "ServicePrincipalObjectId",
+                    "ApplicationId": "ApplicationId",
+                    "CredentialKeyId": "ServicePrincipalCredentialKeyId",
+                    "IsFirstPartyApp": "IsFirstPartyApp",
+                    "PrivilegedAccess": "WorkloadIdClassification",
+                    "EntraDirectoryRoles": "EntraIdRoles",
+                    "MSGraphRoles": "AppRolePermissions",
+                    "ConditionalAccess": "ConditionalAccessStatus",
+                    "MSGraphUri": "RequestUri",
+                    "MSGraphMethod": "RequestMethod",
+                    "UserAgent": "UserAgent",
+                    "Location": "Location"
+                },
+                "entityMappings": [
+                    {
+                        "entityType": "CloudApplication",
+                        "fieldMappings": [
+                            {
+                                "identifier": "Name",
+                                "columnName": "WorkloadIdentityName"
+                            }
+                        ]
+                    },
+                    {
+                        "entityType": "CloudApplication",
+                        "fieldMappings": [
+                            {
+                                "identifier": "AppId",
+                                "columnName": "ApplicationId"
+                            }
+                        ]
+                    },
+                    {
+                        "entityType": "IP",
+                        "fieldMappings": [
+                            {
+                                "identifier": "Address",
+                                "columnName": "ActivityIpAddress"
+                            }
+                        ]
+                    },
+                    {
+                        "entityType": "IP",
+                        "fieldMappings": [
+                            {
+                                "identifier": "Address",
+                                "columnName": "SignInIpAddress"
+                            }
+                        ]
+                    }
+                ],
+                "sentinelEntitiesMappings": null,
+                "templateVersion": null
+            }
+        }
+    ]
+}
