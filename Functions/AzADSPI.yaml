@@ -23,4 +23,6 @@ FunctionQuery: |
         ApplicationId = tostring(parse_json(SP)[0].SPAppId),
         ApplicationOwners = APPAppOwners,
         EntraGroupMemberships = APPAppOwners,
+        ManagedIdentityAssociatedAzureResources,
+        ManagedIdentityFederatedIdentityCredentials,
         AzureRoles = SPAzureRoleAssignments

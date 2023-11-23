@@ -62,4 +62,6 @@ FunctionQuery: |
         EntraGroupMemberships = APPAppOwners,
         AppRolePermissions,
         AzureRoles = SPAzureRoleAssignments,
+        ManagedIdentityAssociatedAzureResources,
+        ManagedIdentityFederatedIdentityCredentials,        
         EnterpriseAccessModelTiering = Classification
