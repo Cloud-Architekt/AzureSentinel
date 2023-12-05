@@ -32,26 +32,19 @@ FunctionQuery: |
   let AddedSensitiveDirectoryRoles = AuditLogs
   | where TimeGenerated >ago(1d)
       | where Category =~ "RoleManagement"
-      | where AADOperationType in ("Assign", "AssignEligibleRole")
-      | where ActivityDisplayName has_any ("Add eligible member to role", "Add member to role")
-      | where ( InitiatedBy.app.displayName != "MS-PIM" or OperationName == "Add eligible member to role" )
+  | where ActivityDisplayName has_any ("Add eligible member to role", "Add member to role") and Identity != "MS-PIM"
       | mv-apply TargetResource = TargetResources on
         (
           where TargetResource.type in~ ("User", "ServicePrincipal", "Group")
-          | extend RoleAssignment = TargetResource.modifiedProperties
-          | extend PrivilegedIdentityObjectId = tostring(TargetResource.id)
-          | extend TargetName = iff(TargetResource.type !~ "User", tostring(TargetResource.displayName), tostring(TargetResource.userPrincipalName))
-          | extend PrivilegedIdentityType = tostring(TargetResource.type)
+          | extend PrivilegedIdentityObjectId = tostring(TargetResource.id),
+                   PrivilegedIdentityType = tostring(TargetResource.type),
+                   PrivilegedIdentityName = iff(TargetResource.type !~ "User", tostring(TargetResource.displayName), tostring(TargetResource.userPrincipalName))
         )
+      | mv-expand TargetResources | where TargetResources.type == "Role" | extend RoleId = tostring(TargetResources.id)
       // Name of user is not included in audit log, lookup to UnifiedIdentityInfo table for enrichment
       | join kind=leftouter ( UnifiedIdentityInfo | project ObjectId, ObjectDisplayName ) on $left.PrivilegedIdentityObjectId == $right.ObjectId
       // Name of user is not included in audit log, using ObjectDisplayName from UnifiedIdentityInfo table
-      | extend PrivilegedIdentityName = iff(TargetResource.type =~ "User", ObjectDisplayName, TargetName)
-      | mv-apply Property = RoleAssignment on
-        (
-          where Property.displayName =~ "Role.TemplateId"
-          | extend RoleId = trim('"', tostring(Property.newValue))
-        )
+      | extend PrivilegedIdentityName = iff(TargetResource.type =~ "User", ObjectDisplayName, PrivilegedIdentityName)
       | where Result == "success"
       | join kind=inner ( SensitiveEntraDirectoryRoles | project AddedRoleClassification = Classification, Category = Category, RoleId, RoleName ) on RoleId
       | extend PrivilegedAssignmentType = "DirectoryRole"
