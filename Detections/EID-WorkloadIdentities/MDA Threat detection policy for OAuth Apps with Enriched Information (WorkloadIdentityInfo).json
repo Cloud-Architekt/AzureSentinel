@@ -14,7 +14,7 @@
             "kind": "Scheduled",
             "apiVersion": "2022-11-01-preview",
             "properties": {
-                "displayName": "MDA Threat detection policy with Enriched Information",
+                "displayName": "MDA Threat detection policy for OAuth Apps with Enriched Information (WorkloadIdentityInfo)",
                 "description": "This analytic rule is creating an incident from MDA Threat detection policy with Entity Mapping to Cloud Application and other enrichments from the original event in the SecurityAlert.",
                 "severity": "Medium",
                 "enabled": true,
