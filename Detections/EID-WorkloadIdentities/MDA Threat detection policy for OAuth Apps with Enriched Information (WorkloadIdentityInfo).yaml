@@ -1,5 +1,5 @@
 id: 3a2336d2-76e5-4365-a7ef-b8cfed604534
-name: MDA Threat detection policy with Enriched Information
+name: MDA Threat detection policy for OAuth Apps with Enriched Information
 version: 1.0.0
 kind: Scheduled
 description: This analytic rule is creating an incident from MDA Threat detection policy with Entity Mapping to Cloud Application and other enrichments from the original event in the SecurityAlert.
