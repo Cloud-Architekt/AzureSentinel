@@ -17,7 +17,13 @@ FunctionQuery: |
     | mv-expand AssignedRoles
     | extend RoleName = tostring(AssignedRoles)
     | join kind=inner ( SensitiveEntraDirectoryRoles ) on RoleName
-    | summarize Classification = make_set(parse_json(Classification.EAMTierLevelName)), RoleAssignments = make_set(RoleName) by AccountObjectId, AccountDisplayName, OnPremisesAccountObjectId;
+    | join kind=inner ( SensitiveEntraDirectoryRoles ) on RoleName
+    | extend AadDirectoryRoleTierLevels = parse_json(Classification.EAMTierLevelName)
+    | extend Classification = iif((AadDirectoryRoleTierLevels contains "ControlPlane"), "ControlPlane", "Unclassified")
+    | extend Classification = iif((Classification == "Unclassified" and (AadDirectoryRoleTierLevels contains "ManagementPlane")), "ManagementPlane", Classification)
+    | extend Classification = iif((Classification == "Unclassified" and (AadDirectoryRoleTierLevels contains "WorkloadPlane")), "WorkloadPlane", Classification)
+    | extend Classification = iif((Classification == "Unclassified" and (AadDirectoryRoleTierLevels contains "UserAccess")), "UserAccess", Classification)
+    | summarize RoleAssignments = make_set(RoleName) by AccountObjectId, AccountDisplayName, OnPremisesAccountObjectId, Classification;
     let PrivilegedUsers = SensitiveUsers
     | extend OnPremSynchronized = iff(isnotempty(OnPremisesAccountObjectId), "true", "false")
     | project
