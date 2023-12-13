@@ -22,13 +22,14 @@ FunctionQuery: |
     | extend Classification = iif((Classification == "Unclassified" and (AadDirectoryRoleTierLevels contains "ManagementPlane")), "ManagementPlane", Classification)
     | extend Classification = iif((Classification == "Unclassified" and (AadDirectoryRoleTierLevels contains "WorkloadPlane")), "WorkloadPlane", Classification)
     | extend Classification = iif((Classification == "Unclassified" and (AadDirectoryRoleTierLevels contains "UserAccess")), "UserAccess", Classification)
-    | summarize RoleAssignments = make_set(RoleName) by AccountObjectId, AccountDisplayName, OnPremisesAccountObjectId, Classification;
+    | summarize RoleAssignments = make_set(RoleName) by AccountObjectId, AccountDisplayName, AccountUPN, OnPremisesAccountObjectId, Classification;
     let PrivilegedUsers = SensitiveUsers
     | extend OnPremSynchronized = iff(isnotempty(OnPremisesAccountObjectId), "true", "false")
     | project
         ObjectId = tostring(AccountObjectId),
         ObjectType = "User",
         ObjectDisplayName = AccountDisplayName,
+        UserPrincipalName = AccountUPN,
         OnPremSynchronized,
         tostring(Classification),
         EntraIdRoles = RoleAssignments;
