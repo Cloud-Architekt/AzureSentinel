@@ -2,7 +2,7 @@ id: 7006a60d-9506-4bae-b958-1f68f9bdc107
 name: Workload ID Protection Alerts with Enriched Information
 version: 1.0.0
 kind: Scheduled
-description: This analytic rule is creating an incident from Workload ID Protection with Entity Mapping to Cloud Application and other enrichments from the original event in the SecurityAlert.
+description: This analytic rule is creating an incident from an existing  Workload ID Protection with Entity Mapping to Cloud Application and other enrichments from the original event in the SecurityAlert.
 severity: Medium
 queryFrequency: 1h
 queryPeriod: 1h
@@ -12,8 +12,7 @@ query: |+
   SecurityAlert
   | where ProviderName == "IPC"
   | where parse_json(ExtendedProperties).State == "Open" and Status == "New"
-  | mv-expand parse_json(Entities)
-  | where Entities.Type == "service-principal"
+  | mv-apply todynamic(Entities) on (where Entities.Type == "service-principal")
   | extend ServicePrincipalObjectId = tostring(Entities.ServicePrincipalObjectId)
   | project
       TimeGenerated,
@@ -41,7 +40,7 @@ query: |+
           AppRolePermissions
       )
       on ServicePrincipalObjectId
-  | join kind=inner (
+  | join kind=innerunique (
       SecurityIncident
       | mv-expand AlertIds
       | extend SystemAlertId = tostring(AlertIds)
