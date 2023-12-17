@@ -22,15 +22,17 @@ FunctionQuery: |
     | extend Classification = iif((Classification == "Unclassified" and (AadDirectoryRoleTierLevels contains "ManagementPlane")), "ManagementPlane", Classification)
     | extend Classification = iif((Classification == "Unclassified" and (AadDirectoryRoleTierLevels contains "WorkloadPlane")), "WorkloadPlane", Classification)
     | extend Classification = iif((Classification == "Unclassified" and (AadDirectoryRoleTierLevels contains "UserAccess")), "UserAccess", Classification)
-    | summarize RoleAssignments = make_set(RoleName) by AccountObjectId, AccountDisplayName, AccountUPN, OnPremisesAccountObjectId, Classification;
+    | summarize RoleAssignments = make_set(RoleName) by AccountObjectId, AccountDisplayName, AccountUPN, OnPremisesAccountObjectId, DeletedDateTime, Classification;
     let PrivilegedUsers = SensitiveUsers
     | extend OnPremSynchronized = iff(isnotempty(OnPremisesAccountObjectId), "true", "false")
+    | extend IsDeleted =  iff(isnotempty(DeletedDateTime), "true", "false")    
     | project
         ObjectId = tostring(AccountObjectId),
         ObjectType = "User",
         ObjectDisplayName = AccountDisplayName,
         UserPrincipalName = AccountUPN,
         OnPremSynchronized,
+        IsDeleted,
         tostring(Classification),
         EntraIdRoles = RoleAssignments;
     let AllUsers = IdentityInfo
@@ -40,11 +42,13 @@ FunctionQuery: |
     | join kind=leftanti ( PrivilegedUsers ) on ObjectId
     | extend DefaultPermissionClassification = "UserAccess"
     | extend OnPremSynchronized = iff(isnotempty(OnPremisesAccountObjectId), "true", "false")
+    | extend IsDeleted =  iff(isnotempty(DeletedDateTime), "true", "false")
     | project
         ObjectId,
         ObjectType = "User",
         ObjectDisplayName = AccountDisplayName,
         OnPremSynchronized,
+        IsDeleted,
         Classification = DefaultPermissionClassification;
     let PrivilegedWorkloads = PrivilegedWorkloadIdentityInfo
     | where isnotempty(EntraIdRoles) or isnotempty(AppRolePermissions)
