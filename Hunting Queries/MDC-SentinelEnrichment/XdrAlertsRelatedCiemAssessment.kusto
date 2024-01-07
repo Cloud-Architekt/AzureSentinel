@@ -1,0 +1,16 @@
+SecurityAlert
+| where TimeGenerated >ago(30d)
+| mv-expand parse_json(Entities)
+| where Entities.Type == "oauth-application"
+| extend PrincipalId = tolower(Entities.OAuthObjectId)
+| distinct AlertName, AlertDescription = Description, AlertSeverity, AlertStatus = Status, AlertRemediationSteps = RemediationSteps, PrincipalId
+| join hint.remote=left (arg("").securityresources | where type =~ "microsoft.security/assessments/subassessments"
+        | project PrincipalId=tostring(properties.displayName),
+            AssessmentDescription=tostring(properties.description),
+            AssessmentRemediation=tostring(properties.remediation),
+            AssessmentSeverity=tostring(properties.status.severity),
+            AssessmentStatus=tostring(properties.status.code),
+            AssessmentAdditionalData=tostring(properties.additionalData),
+            AssessmentScopeResourceId = tostring(properties.resourceDetails.id)
+    ) on PrincipalId
+| project-away PrincipalId1

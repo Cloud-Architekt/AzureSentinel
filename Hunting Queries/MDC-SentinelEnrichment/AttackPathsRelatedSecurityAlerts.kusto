@@ -1,0 +1,30 @@
+arg("").securityresources
+| where type == "microsoft.security/attackpaths"
+| extend AttackPathDisplayName = tostring(properties["displayName"])
+| mvexpand (properties.graphComponent.entities)
+| extend Entity = parse_json(properties_graphComponent_entities)
+| extend ResourceId = tostring(tolower(Entity.entityIdentifiers.azureResourceId))
+| project AttackPathDisplayName, AttackPathDescription = parse_json(properties.description), AttackPathStory = parse_json(properties.attackStory), ResourceId
+// Existing Security Alert?
+| join kind=inner ( SecurityAlert
+| where TimeGenerated >ago(90d)
+| where ProviderName == "Azure Security Center"
+| mv-expand parse_json(Entities)
+| where Entities.Type == "azure-resource"
+| extend ResourceId = tolower(Entities.ResourceId)
+| project AlertName, AlertSeverity, AlertDescription = Description, ResourceId) on ResourceId
+// System-assigned Managed Identity to the Resource?
+| lookup (
+    arg("").resources | where identity has 'SystemAssigned' or identity has 'UserAssigned' | project ResourceId = tolower(id), identity
+    ) on ResourceId
+| extend principalId = tostring(identity.principalId)
+// Permissions assigned to System-assigned Managed Identity of the Resource?
+| join hint.remote=left (arg("").authorizationresources
+    | where type =~ 'microsoft.authorization/roleassignments'
+    | extend roleDefinitionId = properties.roleDefinitionId
+    | extend principalType = properties.principalType
+    | extend principalId = tostring(properties.principalId)
+    | extend roleAssignmentScope = properties.scope
+    | project principalId, roleDefinitionId, roleAssignmentScope
+) on principalId
+
