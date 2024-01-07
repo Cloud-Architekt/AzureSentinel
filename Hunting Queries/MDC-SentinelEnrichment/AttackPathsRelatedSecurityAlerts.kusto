@@ -15,16 +15,16 @@ arg("").securityresources
 | project AlertName, AlertSeverity, AlertDescription = Description, ResourceId) on ResourceId
 // System-assigned Managed Identity to the Resource?
 | lookup (
-    arg("").resources | where identity has 'SystemAssigned' or identity has 'UserAssigned' | project ResourceId = tolower(id), identity
+    arg("").resources | where identity has 'SystemAssigned' or identity has 'UserAssigned' | project ResourceId = tolower(id), AssociatedWorkloadIdentity = identity
     ) on ResourceId
-| extend principalId = tostring(identity.principalId)
+| extend PrincipalId = tostring(AssociatedWorkloadIdentity.principalId)
 // Permissions assigned to System-assigned Managed Identity of the Resource?
 | join hint.remote=left (arg("").authorizationresources
     | where type =~ 'microsoft.authorization/roleassignments'
-    | extend roleDefinitionId = properties.roleDefinitionId
-    | extend principalType = properties.principalType
-    | extend principalId = tostring(properties.principalId)
-    | extend roleAssignmentScope = properties.scope
-    | project principalId, roleDefinitionId, roleAssignmentScope
-) on principalId
-
+    | extend RoleDefinitionId = properties.roleDefinitionId
+    | extend PrincipalType = properties.principalType
+    | extend PrincipalId = tostring(properties.principalId)
+    | extend RoleAssignmentScope = properties.scope
+    | project PrincipalId, RoleDefinitionId, RoleAssignmentScope
+) on PrincipalId
+| project-away ResourceId1, PrincipalId1
