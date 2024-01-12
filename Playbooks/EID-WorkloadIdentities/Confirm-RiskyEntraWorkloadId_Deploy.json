@@ -1,0 +1,228 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "LogicAppName": {
+            "defaultValue": "Confirm-RiskyEntraWorkloadId",
+            "type": "String"
+        },
+        "SentinelConnectionName": {
+            "defaultValue": "connection-Sentinel-Confirm-RiskyEntraWorkloadId",
+            "type": "String"
+        }
+    },
+    "variables": {
+        "SentinelConnectionId": "[concat(resourceGroup().id, '/providers/Microsoft.Web/connections/', parameters('SentinelConnectionName'))]",
+        "SentinelConnectionApiId": "[concat(subscription().id, '/providers/Microsoft.Web/locations/', resourceGroup().location, '/managedApis/azuresentinel')]"
+    },
+    "resources": [
+        {
+            "type": "Microsoft.Web/connections",
+            "apiVersion": "2016-06-01",
+            "name": "[parameters('SentinelConnectionName')]",
+            "location": "[resourceGroup().location]",
+            "kind": "V1",
+            "properties": {
+                "displayName": "[parameters('SentinelConnectionName')]",
+                "customParameterValues": {},
+                "parameterValueType": "Alternative",
+                "api": {
+                    "id": "[variables('SentinelConnectionApiId')]",
+                    "type": "Microsoft.Web/locations/managedApis"
+                },
+                "testLinks": []
+            }
+        },      
+        {
+            "type": "Microsoft.Logic/workflows",
+            "apiVersion": "2017-07-01",
+            "name": "[parameters('LogicAppName')]",
+            "location": "[resourceGroup().location]",
+            "dependsOn" : [
+                "[resourceId('Microsoft.Web/connections', parameters('SentinelConnectionName'))]"
+            ],            
+            "identity": {
+                "type": "SystemAssigned"
+            },
+            "properties": {
+                "state": "Disabled",
+                "definition": {
+                    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                    "contentVersion": "1.0.0.0",
+                    "parameters": {
+                        "$connections": {
+                            "defaultValue": {},
+                            "type": "Object"
+                        }
+                    },
+                    "triggers": {
+                        "Microsoft_Sentinel_incident": {
+                            "type": "ApiConnectionWebhook",
+                            "inputs": {
+                                "body": {
+                                    "callback_url": "@{listCallbackUrl()}"
+                                },
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['SentinelConnection']['connectionId']"
+                                    }
+                                },
+                                "path": "/incident-creation"
+                            }
+                        }
+                    },
+                    "actions": {
+                        "For_each_Alert": {
+                            "foreach": "@triggerBody()?['object']?['properties']?['Alerts']",
+                            "actions": {
+                                "For_each_ServicePrincipalId_in_Array_from_Custom_Detail": {
+                                    "foreach": "@body('Parse_JSON_-_Custom_Details_from_Alert')?['ServicePrincipalId']",
+                                    "actions": {
+                                        "Check_Conditions_of_Service_Principal": {
+                                            "actions": {
+                                                "Add_comment_-_confirmed_compromised_SP_to_incident": {
+                                                    "runAfter": {
+                                                        "Microsoft_Graph_API_-_POST_confirmCompromised_on_riskyServicePrincipals": [
+                                                            "Succeeded"
+                                                        ]
+                                                    },
+                                                    "type": "ApiConnection",
+                                                    "inputs": {
+                                                        "body": {
+                                                            "incidentArmId": "@triggerBody()?['object']?['id']",
+                                                            "message": "<p>Service Principal with ObjectId \"@{items('For_each_ServicePrincipalId_in_Array_from_Custom_Detail')}\" <span style=\"color: rgb(65,168,95)\"><strong>has been marked as compromised</strong></span> as via playbook</p>"
+                                                        },
+                                                        "host": {
+                                                            "connection": {
+                                                                "name": "@parameters('$connections')['SentinelConnection']['connectionId']"
+                                                            }
+                                                        },
+                                                        "method": "post",
+                                                        "path": "/Incidents/Comment"
+                                                    }
+                                                },
+                                                "Microsoft_Graph_API_-_POST_confirmCompromised_on_riskyServicePrincipals": {
+                                                    "runAfter": {},
+                                                    "type": "Http",
+                                                    "inputs": {
+                                                        "authentication": {
+                                                            "audience": "https://graph.microsoft.com",
+                                                            "type": "ManagedServiceIdentity"
+                                                        },
+                                                        "body": {
+                                                            "servicePrincipalIds": [
+                                                                "@{items('For_each_ServicePrincipalId_in_Array_from_Custom_Detail')}"
+                                                            ]
+                                                        },
+                                                        "method": "POST",
+                                                        "uri": "https://graph.microsoft.com/beta/identityProtection/riskyServicePrincipals/confirmCompromised"
+                                                    }
+                                                }
+                                            },
+                                            "runAfter": {},
+                                            "else": {
+                                                "actions": {
+                                                    "Add_comment_-_no_action_on_SP_to_incident": {
+                                                        "runAfter": {},
+                                                        "type": "ApiConnection",
+                                                        "inputs": {
+                                                            "body": {
+                                                                "incidentArmId": "@triggerBody()?['object']?['id']",
+                                                                "message": "<p>Service Principal with ObjectId \"@{items('For_each_ServicePrincipalId_in_Array_from_Custom_Detail')}\" <span style=\"color: rgb(184,49,47)\"><strong>has not been</strong></span> marked as compromise via playbook</p>"
+                                                            },
+                                                            "host": {
+                                                                "connection": {
+                                                                    "name": "@parameters('$connections')['SentinelConnection']['connectionId']"
+                                                                }
+                                                            },
+                                                            "method": "post",
+                                                            "path": "/Incidents/Comment"
+                                                        }
+                                                    }
+                                                }
+                                            },
+                                            "expression": {
+                                                "and": [
+                                                    {
+                                                        "not": {
+                                                            "equals": [
+                                                                "@items('For_each_ServicePrincipalId_in_Array_from_Custom_Detail')",
+                                                                "@null"
+                                                            ]
+                                                        }
+                                                    }
+                                                ]
+                                            },
+                                            "type": "If"
+                                        }
+                                    },
+                                    "runAfter": {
+                                        "Parse_JSON_-_Custom_Details_from_Alert": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Foreach"
+                                },
+                                "Parse_JSON_-_Custom_Details_from_Alert": {
+                                    "runAfter": {},
+                                    "type": "ParseJson",
+                                    "inputs": {
+                                        "content": "@items('For_each_Alert')?['properties']?['additionalData']?['Custom Details']",
+                                        "schema": {
+                                            "properties": {
+                                                "IsFirstPartyApp": {
+                                                    "items": {
+                                                        "type": "string"
+                                                    },
+                                                    "type": "array"
+                                                },
+                                                "ServicePrincipalId": {
+                                                    "items": {
+                                                        "type": "string"
+                                                    },
+                                                    "type": "array"
+                                                },
+                                                "WorkloadIdentityName": {
+                                                    "items": {
+                                                        "type": "string"
+                                                    },
+                                                    "type": "array"
+                                                },
+                                                "WorkloadIdentityType": {
+                                                    "items": {
+                                                        "type": "string"
+                                                    },
+                                                    "type": "array"
+                                                }
+                                            },
+                                            "type": "object"
+                                        }
+                                    }
+                                }
+                            },
+                            "runAfter": {},
+                            "type": "Foreach"
+                        }
+                    },
+                    "outputs": {}
+                },
+                "parameters": {
+                    "$connections": {
+                        "value": {
+                            "SentinelConnection": {
+                                "connectionId": "[variables('SentinelConnectionId')]",
+                                "connectionName": "[parameters('SentinelConnectionName')]",
+                                "connectionProperties": {
+                                    "authentication": {
+                                        "type": "ManagedServiceIdentity"
+                                    }
+                                },
+                                "id": "[variables('SentinelConnectionApiId')]"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    ]
+}
