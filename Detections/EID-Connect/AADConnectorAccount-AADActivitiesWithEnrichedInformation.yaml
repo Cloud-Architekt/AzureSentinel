@@ -1,5 +1,6 @@
 id: 5f1bdb2f-5622-4ab2-bc4b-96cc9ff480c8
 name: Activities from AAD connector account with enrichment of IdentityInfo
+kind: Scheduled
 description: |
   'This hunting query can be used customized as detection or for further investigation of changes which was made by the whitelisted AAD connector account. It allows to find take over or synchronization to user objects with sensitive group membership or assigned AAD roles. This query is also useful to find anomaly of object changes.'
 severity: Medium
