@@ -34,3 +34,4 @@ entityMappings:
       - identifier: Address
         columnName: IPAddress    
 version: 1.0.0
+kind: Scheduled
