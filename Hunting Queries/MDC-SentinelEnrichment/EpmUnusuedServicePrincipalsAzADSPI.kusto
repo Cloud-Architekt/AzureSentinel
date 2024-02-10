@@ -1,0 +1,25 @@
+arg("").securityresources
+| extend AssessmentName = "Unused identities in your Azure environment should be removed"
+| where id contains "7af29efb-41cc-47b6-81b8-800a0888f9a2"
+| extend PermissionsCreepIndex = parse_json(tostring(parse_json(tostring(properties.additionalData)).permissionsCreepIndex))
+| extend ResourceDetails = parse_json(tostring(properties.resourceDetails))
+| project AssessmentName,
+    AssessmentPrincipalId = tostring(properties.displayName),
+    PrincipalType = tolower(tostring(properties.category)),
+    TimeGenerated = properties.timeGenerated,    
+    Severity = tostring(properties.status.severity),
+    Status  =  tostring(properties.status.code),
+    ResourcePlatform = tostring(ResourceDetails.source),
+    SubscriptionId = tostring(ResourceDetails.id),
+    PciScore = PermissionsCreepIndex.score
+    | where PrincipalType == "serviceprincipal"
+    | join kind=inner (
+       // Requires ingestion of AzADServicePrincipalInsights as custom table
+       // Follow steps: https://www.cloud-architekt.net/entra-workload-id-advanced-detection-enrichment/#integration-of-azadserviceprincipalinsights-as-custom-table
+       AzADSPI
+        | extend AssessmentPrincipalId = ServicePrincipalObjectId
+        | mv-expand AzureRoles
+        // EPM supports only SubscriptionId scope at the moment
+        | extend SubscriptionId = iff((tostring(AzureRoles.roleAssignment.scope) startswith "/subscriptions/"), tolower(extract(@"/subscriptions/([^/]+)", 0, tostring(AzureRoles.roleAssignment.scope))),"")
+        | where isnotempty(SubscriptionId)
+     ) on AssessmentPrincipalId, SubscriptionId
