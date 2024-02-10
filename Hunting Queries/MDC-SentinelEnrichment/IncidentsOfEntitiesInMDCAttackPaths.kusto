@@ -4,12 +4,15 @@ arg("").securityresources
 | mvexpand (properties.graphComponent.entities)
 | extend Entity = parse_json(properties_graphComponent_entities)
 | extend ResourceId = tostring(tolower(Entity.entityIdentifiers.azureResourceId))
-| where ResourceId  != ""
-| project AttackPathDisplayName, ResourceId
+| where isnotempty(ResourceId)
+| extend AttackStory = parse_json(properties.attackStory)
+| extend AttackDescription = parse_json(properties.description)
+| project AttackPathDisplayName, AttackStory, AttackDescription, ResourceId
 | join hint.remote=right (SecurityAlert
     | extend EntitiesDynamicArray = parse_json(Entities) | mv-expand EntitiesDynamicArray
     | extend Entitytype = tostring(parse_json(EntitiesDynamicArray).Type), EntityName = tostring(parse_json(EntitiesDynamicArray).Name)
     | where Entitytype == "azure-resource"
     | extend ResourceId = tostring(tolower(EntitiesDynamicArray.ResourceId))
-    | project TimeGenerated, AlertName, AlertSeverity, ResourceId
+    | project AlertTimeGenerated = TimeGenerated, AlertName, AlertSeverity, ResourceId, AlertLink, AlertDescription = Description
 ) on ResourceId
+| project-away ResourceId1

@@ -44,3 +44,4 @@ entityMappings:
       - identifier: ResourceId
         columnName: RoleScope
 version: 1.2.0
+kind: Scheduled
