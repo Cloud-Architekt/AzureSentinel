@@ -1,0 +1,17 @@
+// Get a list of first party apps with activity to Microsoft Graph and enriched classification
+let SensitiveMsGraphPermissions = externaldata(AppId: guid, AppRoleId: guid, AppRoleDisplayName: string, Category: string, EAMTierLevelName: string, EAMTierLevelTagValue: string)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_AppRoles.json"] with (format='multijson')
+    | where isnotempty(EAMTierLevelName)
+    // Optional: Filtering for Control Plane only
+    //| where EAMTierLevelName == "ControlPlane"    
+    | distinct AppRoleDisplayName;
+_GetWatchlist('WorkloadIdentityInfo')
+| where IsFirstPartyApp == "True"
+| extend Identity = tostring(ServicePrincipalObjectId)
+| join kind=inner (
+    MicrosoftGraphActivityLogs
+    | where TimeGenerated >ago(365d)
+    | where Roles has_any (SensitiveMsGraphPermissions)
+    | extend Roles = split(Roles, ' ')
+    | extend Identity = ServicePrincipalId
+) on Identity
+| summarize make_set( Roles ) by AppDisplayName, ServicePrincipalObjectId

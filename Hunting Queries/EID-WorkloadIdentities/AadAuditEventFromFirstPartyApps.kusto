@@ -1,0 +1,8 @@
+// Get a list of first party apps from Entra ID Audit Log with summarized operations
+_GetWatchlist('WorkloadIdentityInfo')
+| where IsFirstPartyApp == "True"
+| extend Identity = tostring(AppDisplayName)
+| join kind=inner ( AuditLogs
+    | where TimeGenerated >ago(365d)
+) on Identity
+| summarize make_set( OperationName ) by AppDisplayName, ServicePrincipalObjectId, AppId
