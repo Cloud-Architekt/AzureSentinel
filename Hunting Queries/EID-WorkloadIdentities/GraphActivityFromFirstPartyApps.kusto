@@ -5,7 +5,7 @@ let SensitiveMsGraphPermissions = externaldata(AppId: guid, AppRoleId: guid, App
     //| where EAMTierLevelName == "ControlPlane"    
     | distinct AppRoleDisplayName;
 _GetWatchlist('WorkloadIdentityInfo')
-| where IsFirstPartyApp == "True"
+| where IsFirstPartyApp == "true"
 | extend Identity = tostring(ServicePrincipalObjectId)
 | join kind=inner (
     MicrosoftGraphActivityLogs
