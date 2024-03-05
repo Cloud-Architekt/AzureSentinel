@@ -14,4 +14,4 @@ _GetWatchlist('WorkloadIdentityInfo')
     | extend Roles = split(Roles, ' ')
     | extend Identity = ServicePrincipalId
 ) on Identity
-| summarize make_set( Roles ) by AppDisplayName, ServicePrincipalObjectId
+| summarize AppRoleScope = make_set( Roles ), TotalResponseSizeBytes = sum(ResponseSizeBytes) by AppDisplayName, ServicePrincipalObjectId, AppId, AppOwnerTenantId, ServicePrincipalType, SignInAudience
