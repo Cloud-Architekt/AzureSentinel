@@ -1,0 +1,35 @@
+// Query based on Microsoft TechCommunity blog post "Easily Manage Privileged Role Assignments in Microsoft Entra ID Using Audit Logs"
+// Source: https://techcommunity.microsoft.com/t5/microsoft-entra-blog/easily-manage-privileged-role-assignments-in-microsoft-entra-id/ba-p/4013854
+// List of operations (sorted by count) performed by privileged users (and all directory roles) in the last 14 days and showing related Enterprise Access Model Tiering Level and built-in classification by Microsoft (isPrivileged)
+
+let Lookback = 14d;
+let PrivilegedRoles = externaldata(RoleName: string, RoleId: string, isPrivileged: bool, Classification: dynamic)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_EntraIdDirectoryRoles.json"] with(format='multijson')
+| where Classification.EAMTierLevelName != "Unclassified"
+| extend EAMTierLevelName = Classification.EAMTierLevelName
+| project RoleName, isPrivileged, EAMTierLevelName;
+AuditLogs 
+| where TimeGenerated > ago(Lookback) 
+| extend ActorName = iif( 
+                         isnotempty(tostring(InitiatedBy["user"])),  
+                         tostring(InitiatedBy["user"]["userPrincipalName"]), 
+                         tostring(InitiatedBy["app"]["displayName"]) 
+                     ) 
+| extend ActorID = iif( 
+                       isnotempty(tostring(InitiatedBy["user"])),  
+                       tostring(InitiatedBy["user"]["id"]), 
+                       tostring(InitiatedBy["app"]["appId"]) 
+                   ) 
+| where isnotempty(ActorName) 
+| join kind=inner (IdentityInfo 
+    | where TimeGenerated > ago(Lookback) 
+    | mv-expand AssignedRoles
+    | extend RoleName = tostring(AssignedRoles)
+    | join kind=inner ( PrivilegedRoles) on RoleName
+    | summarize EAMTierLevelName = make_set(EAMTierLevelName), isPrivileged = make_set(isPrivileged), AssignedRoles = make_set(AssignedRoles) by AccountObjectId
+    | extend isPrivileged = iff((isPrivileged contains "true"), true, false)
+    ) on $left.ActorID == $right.AccountObjectId 
+| where AssignedRoles has_any (PrivilegedRoles) 
+| summarize Operations = make_set(OperationName) by ActorName, ActorID, tostring(AssignedRoles), tostring(isPrivileged), tostring(EAMTierLevelName)
+| extend OperationsCount = array_length(Operations) 
+| project ActorName, ActorID, EAMTierLevelName, isPrivileged, AssignedRoles, Operations, OperationsCount
+| sort by OperationsCount desc 
