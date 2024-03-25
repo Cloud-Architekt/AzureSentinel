@@ -1,6 +1,7 @@
 // Query based on Microsoft TechCommunity blog post "Easily Manage Privileged Role Assignments in Microsoft Entra ID Using Audit Logs"
 // Source: https://techcommunity.microsoft.com/t5/microsoft-entra-blog/easily-manage-privileged-role-assignments-in-microsoft-entra-id/ba-p/4013854
 // List of operations (sorted by count) performed by privileged users (and all directory roles) in the last 14 days and showing related Enterprise Access Model Tiering Level and built-in classification by Microsoft (isPrivileged)
+// Known limitation: Does not cover workload identities
 
 let Lookback = 14d;
 let PrivilegedRoles = externaldata(RoleName: string, RoleId: string, isPrivileged: bool, Classification: dynamic)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_EntraIdDirectoryRoles.json"] with(format='multijson')
