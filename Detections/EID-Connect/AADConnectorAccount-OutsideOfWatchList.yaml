@@ -1,6 +1,6 @@
 id: 86e9ba6f-d1ed-48b8-a849-c26f77db8c1b
 name: Detection of Microsoft Entra Connect accounts outside of WatchLists
-version: 1.0.3
+version: 1.0.4
 kind: Scheduled
 description: List of objects with Directory role membership to "Directory Synchronization" or a successfull sign in to the Entra Connect APIs which aren't stored in the WatchList was found. Indicator of creating AAD connector account as backdoor.
 severity: Medium
