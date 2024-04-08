@@ -2,7 +2,7 @@ id: 86e9ba6f-d1ed-48b8-a849-c26f77db8c1b
 name: Detection of Microsoft Entra Connect accounts outside of WatchLists
 version: 1.0.3
 kind: Scheduled
-description: List of objects with Directory role membership to "Directory Synchronization" or naming similar to Microsoft Entra Connect account which aren't stored in the WatchList was found. Indicator of creating AAD connector account as backdoor.
+description: List of objects with Directory role membership to "Directory Synchronization" or a successfull sign in to the Entra Connect APIs which aren't stored in the WatchList was found. Indicator of creating AAD connector account as backdoor.
 severity: Medium
 queryFrequency: 1d
 queryPeriod: 14d
@@ -30,6 +30,7 @@ query: |
       | where (UserPrincipalName startswith "sync_" and UserPrincipalName endswith "onmicrosoft.com")
           or AppId == "cb1056e2-e479-49de-ae31-7812af012ed8"
           or AppId == "6eb59a73-39b2-4c23-a70f-e2e3ce8965b1"
+      | where ResultType == 0
       | summarize by AccountObjectId = UserId);
   // Query all explicitly tagged Microsoft Entra Connect / Azure AD Connect account in the watchlist ServiceAccounts
   let WatchList = _GetWatchlist('ServiceAccounts')
