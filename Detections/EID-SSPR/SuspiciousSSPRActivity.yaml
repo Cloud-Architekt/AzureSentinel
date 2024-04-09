@@ -27,7 +27,7 @@ query: |
   AuditLogs
   | where TimeGenerated >= ago(SSPRLookback)
   | where LoggedByService == "Self-service Password Management" and ResultDescription == "User completed all verification steps required to reset their password"
-  | extend AccountType = tostring(TargetResources[0].type), UserPrincipalName = tostring(TargetResources[0].userPrincipalName),
+  | extend AccountType = tostring(TargetResources[0].type), UserPrincipalName = tolower(tostring(TargetResources[0].userPrincipalName)),
     TargetResourceName = tolower(tostring(TargetResources[0].displayName)), SSPRSourceIP = tostring(InitiatedBy.user.ipAddress)
   | project UserPrincipalName, SSPRSourceIP, SSPRAttemptTime = TimeGenerated, CorrelationId
   | join kind= leftouter (
@@ -36,7 +36,7 @@ query: |
       | where ResultType == "0"
       | where RiskLevelAggregated == "none" or RiskLevelDuringSignIn == "none"
       | extend TrustedIP = tostring(IPAddress)
-      | project UserPrincipalName, TrustedIP, SignInTime = TimeGenerated
+      | project UserPrincipalName=tolower(UserPrincipalName), TrustedIP, SignInTime = TimeGenerated
   ) on UserPrincipalName
   | where SSPRAttemptTime > coalesce(SignInTime, datetime(0))
   | extend TimeDifferenceInMinutes= iif(SSPRSourceIP==TrustedIP,datetime_diff("Minute",SignInTime,SSPRAttemptTime), 0), Match=SSPRSourceIP==TrustedIP
