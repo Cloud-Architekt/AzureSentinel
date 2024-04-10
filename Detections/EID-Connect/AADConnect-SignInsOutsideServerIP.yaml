@@ -1,7 +1,7 @@
 id: 12531591-8392-4b4c-b117-485216bbf577
-name: Successful sign-ins from valid AAD connector account outside of whitelisted IP address from WatchList
+name: Successful sign-ins from valid Microsoft Entra Connector account outside of whitelisted IP address from WatchList
 description: |
-  'Detection of sign-ins outside of a named public IP addresses. We're AccountObject ID from the "Service Accounts" watchlist to detect any sign-ins outside of the named IP address which is defined in the "High Value Asses" watchlist. Furthermore, we're covering all sign-ins to the AAD Connect Endpoints (Azure AD Sync and AAD Connect V2) to detect sign-ins that doesn't match with the WatchList.'
+  'Detection of sign-ins outside of a named public IP addresses. We're AccountObject ID from the "Service Accounts" watchlist to detect any sign-ins outside of the named IP address which is defined in the "High Value Asses" watchlist. Furthermore, we're covering all sign-ins to the Microsoft Entra Connect Endpoints (Azure AD Sync and AAD Connect V2) to detect sign-ins that doesn't match with the WatchList.'
 severity: Medium
 requiredDataConnectors:
   - connectorId: AzureActiveDirectory
@@ -10,8 +10,8 @@ requiredDataConnectors:
   - connectorId: AzureActiveDirectory
     dataTypes:
       - AADNonInteractiveUserSignInLogs
-queryFrequency: 1d
-queryPeriod: 1d
+queryFrequency: 30m
+queryPeriod: 1h
 triggerOperator: gt
 triggerThreshold: 0
 tactics:
@@ -23,10 +23,11 @@ relevantTechniques:
   - T1528
 query: |
   let AADCServer = (_GetWatchlist('HighValueAssets')
-      | where ['Tags'] has "Azure AD Connect" | project ['IP Address']);
+    | where (['Tags'] has "Azure AD Connect") or (['Tags'] has "Entra Connect") | project ['IP Address']);
   let AADConnectorAcc = (_GetWatchlist('ServiceAccounts')
-      | where ['Tags'] has "Azure AD Connect" | project AccountObjectId = ['Service AAD Object Id']);
+    | where (['Tags'] has "Azure AD Connect") or (['Tags'] has "Entra Connect") | project AccountObjectId = ['Service AAD Object Id']);
   union isfuzzy=true AADNonInteractiveUserSignInLogs, SigninLogs
+  | where ingestion_time() > ago(40m)
   // AADC APIs: AADSync = "cb1056e2-e479-49de-ae31-7812af012ed8", AAD Connect v2 = 6eb59a73-39b2-4c23-a70f-e2e3ce8965b1
   | where (UserId in (AADConnectorAcc) or AppId == "cb1056e2-e479-49de-ae31-7812af012ed8" or AppId == "6eb59a73-39b2-4c23-a70f-e2e3ce8965b1") and IPAddress !in (AADCServer)
   | where ResultType == "0"
@@ -41,5 +42,5 @@ entityMappings:
     fieldMappings:
       - identifier: Address
         columnName: IPCustomEntity
-version: 1.0.2
+version: 1.0.3
 kind: Scheduled

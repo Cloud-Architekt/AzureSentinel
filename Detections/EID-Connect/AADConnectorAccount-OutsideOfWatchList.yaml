@@ -1,10 +1,10 @@
 id: 86e9ba6f-d1ed-48b8-a849-c26f77db8c1b
-name: Detection of Microsoft Entra Connect accounts outside of WatchLists
-version: 1.0.4
+name: Activity from unknown Microsoft Entra Connect accounts outside of WatchLists
+version: 1.0.5
 kind: Scheduled
 description: List of objects with Directory role membership to "Directory Synchronization" or a successfull sign in to the Entra Connect APIs which aren't stored in the WatchList was found. Indicator of creating AAD connector account as backdoor.
 severity: Medium
-queryFrequency: 1d
+queryFrequency: 1h
 queryPeriod: 14d
 triggerOperator: gt
 triggerThreshold: 0
@@ -24,8 +24,8 @@ query: |
       | where AssignedRoles has "Directory Synchronization Accounts"
       | summarize by AccountObjectId);
   // Query all users that have signed in to the AADSync API
-  let DirSyncNamedUsers = (union isfuzzy=true AADNonInteractiveUserSignInLogs, SigninLogs
-      | where TimeGenerated > ago(1d)
+  let DirSyncNamedUsers = (SigninLogs
+      | where ingestion_time() > ago(70m)
       // AADC APIs: AADSync = "cb1056e2-e479-49de-ae31-7812af012ed8", AAD Connect v2 = 6eb59a73-39b2-4c23-a70f-e2e3ce8965b1
       | where (UserPrincipalName startswith "sync_" and UserPrincipalName endswith "onmicrosoft.com")
           or AppId == "cb1056e2-e479-49de-ae31-7812af012ed8"
@@ -34,7 +34,7 @@ query: |
       | summarize by AccountObjectId = UserId);
   // Query all explicitly tagged Microsoft Entra Connect / Azure AD Connect account in the watchlist ServiceAccounts
   let WatchList = _GetWatchlist('ServiceAccounts')
-      | where ['Tags'] has "Azure AD Connect"
+      | where (['Tags'] has "Azure AD Connect") or (['Tags'] has "Entra Connect")
       | project AccountObjectId = ['Service AAD Object Id'];
   // Combine the two lists and remove all known accounts
   // All resulting accounts are not possibly not allowed to use this API or have the role assigned
