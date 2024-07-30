@@ -1,9 +1,10 @@
-// List of Directory Roles including classification by EntraOps, categories and rich details by Graph API and their role members with UserType (Guest) or RiskLevel
+// List of Directory Roles including classification by EntraOps, categories and rich details by Graph API and their role members with flags for Guest, Risky User and count of role members.
 // by using IdentityInfo table from Microsoft Sentinel UEBA
-let SensitiveEntraDirectoryRoles = externaldata(RoleName: string, RoleId: string, Categories: string, RichDescription: string, isPrivileged: bool, Classification: dynamic)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_EntraIdDirectoryRoles.json"] with(format='multijson')
+let SensitiveEntraDirectoryRoles = externaldata(RoleName: string, RoleId: string, Categories: string, RichDescription: string, isPrivileged: bool, Classification: dynamic, RolePermissions:dynamic)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_EntraIdDirectoryRoles.json"] with(format='multijson')
 | where Classification.EAMTierLevelName != "Unclassified"
-| extend EAMTierLevelName = Classification.EAMTierLevelName
-| project RoleName, Categories, RichDescription, isPrivileged, EAMTierLevelName;
+| mv-expand RolePermissions
+| extend Categories = split(Categories,',')
+| summarize EntraOpsCategory = make_set(RolePermissions.Category), Categories = make_set(Categories) by RoleName, isPrivileged, EntraOpsClassification = tostring(Classification.EAMTierLevelName), RichDescription;
 let PrivilegedUsers = IdentityInfo
 | where TimeGenerated > ago(14d)
 | summarize arg_max(TimeGenerated, *) by AccountObjectId
@@ -11,5 +12,10 @@ let PrivilegedUsers = IdentityInfo
 | extend RoleName = tostring(AssignedRoles);
 SensitiveEntraDirectoryRoles
 | join kind=inner ( PrivilegedUsers ) on RoleName
-| extend RoleMember = bag_pack_columns(AccountName, AccountUPN, UserType, Tags, IsAccountEnabled, RiskState)
-| summarize RoleMembers = make_list(RoleMember) by RoleName, Categories, isPrivileged, tostring(EAMTierLevelName), tostring(RichDescription)
+| extend RoleAssignment = bag_pack_columns(AccountName, AccountUPN, UserType, Tags, IsAccountEnabled, RiskState)
+| summarize RoleMembers = count(), RoleAssignments = make_list(RoleAssignment), RiskState = make_list(RiskState), UserType = make_list(UserType) by RoleName, tostring(Categories), tostring(EntraOpsCategory), isPrivileged, tostring(EntraOpsClassification), tostring(RichDescription)
+| extend RiskyAdmins = iff(RiskState has "atRisk", true, false)
+| extend GuestAsAdmins = iff(UserType has "Guest", true, false)
+| project-reorder RiskState, RoleName, RichDescription, EntraOpsClassification, isPrivileged, EntraOpsCategory,Categories, RoleMembers, RoleAssignments
+| sort by RoleName asc
+| project-away RiskState, UserType
