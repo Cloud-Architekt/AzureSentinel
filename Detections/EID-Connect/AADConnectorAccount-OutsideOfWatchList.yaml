@@ -1,8 +1,8 @@
 id: 86e9ba6f-d1ed-48b8-a849-c26f77db8c1b
-name: Activity from unknown Microsoft Entra Connect accounts outside of WatchLists
-version: 1.0.5
+name: Detection of Microsoft Entra Connect accounts outside of WatchLists
+version: 1.0.6
 kind: Scheduled
-description: List of objects with Directory role membership to "Directory Synchronization" or a successfull sign in to the Entra Connect APIs which aren't stored in the WatchList was found. Indicator of creating AAD connector account as backdoor.
+description: User account with Directory role membership to "Directory Synchronization" or "On Premises Directory Sync Account" exists in WatchList or successfull sign in to Entra Connect APIs has been detected (outside of WatchList). Indicator of creating AAD connector account as backdoor.
 severity: Medium
 queryFrequency: 1h
 queryPeriod: 14d
@@ -21,7 +21,8 @@ query: |
   let DirSyncRoleAssignedMembers = (IdentityInfo
       | where TimeGenerated > ago(14d)
       | summarize arg_max(TimeGenerated, *) by AccountObjectId
-      | where AssignedRoles has "Directory Synchronization Accounts"
+      | where IsAccountEnabled == true
+      | where AssignedRoles has "Directory Synchronization Accounts" or AssignedRoles has "On Premises Directory Sync Account"
       | summarize by AccountObjectId);
   // Query all users that have signed in to the AADSync API
   let DirSyncNamedUsers = (SigninLogs
@@ -53,7 +54,7 @@ incidentConfiguration:
   groupingConfiguration:
     enabled: false
     reopenClosedIncident: false
-    lookbackDuration: 5m
+    lookbackDuration: 4h
     matchingMethod: AllEntities
     groupByEntities: []
     groupByAlertDetails:
