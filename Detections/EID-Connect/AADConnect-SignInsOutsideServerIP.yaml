@@ -1,7 +1,7 @@
 id: 12531591-8392-4b4c-b117-485216bbf577
-name: Successful sign-ins from valid Microsoft Entra Connector account outside of whitelisted IP address from WatchList
+name: Successful sign-ins from valid Microsoft Entra Connector account outside of allowlisted IP address from WatchList
 description: |
-  'Detection of sign-ins outside of a named public IP addresses. We're AccountObject ID from the "Service Accounts" watchlist to detect any sign-ins outside of the named IP address which is defined in the "High Value Asses" watchlist. Furthermore, we're covering all sign-ins to the Microsoft Entra Connect Endpoints (Azure AD Sync and AAD Connect V2) to detect sign-ins that doesn't match with the WatchList.'
+  Detection of sign-ins outside of a named public IP addresses. We're AccountObject ID from the "Service Accounts" watchlist to detect any sign-ins outside of the named IP address which is defined in the "High Value Asses" watchlist. Furthermore, we're covering all sign-ins to the Microsoft Entra Connect Endpoints (Azure AD Sync and AAD Connect V2) to detect sign-ins that doesn't match with the WatchList.
 severity: Medium
 requiredDataConnectors:
   - connectorId: AzureActiveDirectory
@@ -42,5 +42,5 @@ entityMappings:
     fieldMappings:
       - identifier: Address
         columnName: IPCustomEntity
-version: 1.0.3
+version: 1.0.4
 kind: Scheduled

@@ -1,7 +1,7 @@
 id: 5f1bdb2f-5622-4ab2-bc4b-96cc9ff480c8
-name: Activities from Microsoft Entra connector account outside of whitelisted IP address from WatchList
+name: Activities from Microsoft Entra connector account outside of allowlisted IP address from WatchList
 description: |
-  'This hunting query can be used customized as detection or for further investigation of changes which was made by the whitelisted Microsoft Entra connector account. It allows to find take over or synchronization to user objects with sensitive group membership or assigned Entra roles. This query is also useful to find anomaly of object changes.'
+  This hunting query can be used customized as detection or for further investigation of changes which was made by the allowlisted Microsoft Entra connector account. It allows to find take over or synchronization to user objects with sensitive group membership or assigned Entra roles. This query is also useful to find anomaly of object changes.
 severity: Medium
 requiredDataConnectors:
   - connectorId: AzureActiveDirectory
@@ -40,5 +40,5 @@ entityMappings:
     fieldMappings:
       - identifier: Address
         columnName: IPCustomEntity
-version: 1.0.2
+version: 1.0.3
 kind: Scheduled
