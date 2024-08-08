@@ -1,0 +1,26 @@
+// Early draft: List of Directory Roles including known attack paths (defined by Emilien Socchi repository: https://github.com/emiliensocchi/azure-tiering/blob/main/Entra%20roles/tiered-entra-roles.json), classification by EntraOps, categories and rich details by Graph API and their role members with flags for Guest, Risky User and count of role members from IdentityInfo.
+let SensitiveEntraDirectoryRoles = externaldata(RoleName: string, RoleId: string, Categories: string, RichDescription: string, isPrivileged: bool, Classification: dynamic, RolePermissions:dynamic)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_EntraIdDirectoryRoles.json"] with(format='multijson')
+| where Classification.EAMTierLevelName != "Unclassified"
+| mv-expand RolePermissions
+| extend Categories = split(Categories,',')
+| summarize EntraOpsCategory = make_set(RolePermissions.Category), Categories = make_set(Categories) by RoleName, RoleId, isPrivileged, EntraOpsClassification = tostring(Classification.EAMTierLevelName), RichDescription;
+let KnownAttackPaths = externaldata(id: string, pathType: string, knownShortestPath: string, example: string)["https://raw.githubusercontent.com/emiliensocchi/azure-tiering/main/Entra%20roles/tiered-entra-roles.json"] with(format='multijson')
+| where isnotempty(knownShortestPath) or isnotempty(example)
+| project-rename RoleId = id, AttackPathType = pathType, ShortestAttackPath = knownShortestPath, AttackPathExample = example;
+let PrivilegedUsers = IdentityInfo
+| where TimeGenerated > ago(14d)
+| summarize arg_max(TimeGenerated, *) by AccountObjectId
+| mv-expand AssignedRoles
+| extend RoleName = tostring(AssignedRoles);
+SensitiveEntraDirectoryRoles
+| join kind=inner ( PrivilegedUsers ) on RoleName
+| extend RoleAssignment = bag_pack_columns(AccountName, AccountUPN, UserType, Tags, IsAccountEnabled, RiskState)
+| summarize RoleMembers = count(), RoleAssignments = make_list(RoleAssignment), RiskState = make_list(RiskState), UserType = make_list(UserType) by RoleName, RoleId, tostring(Categories), tostring(EntraOpsCategory), isPrivileged, tostring(EntraOpsClassification), tostring(RichDescription)
+| extend RiskyAdmins = iff(RiskState has "atRisk", true, false)
+| extend GuestAsAdmins = iff(UserType has "Guest", true, false)
+| project-reorder RiskState, RoleName, RichDescription, EntraOpsClassification, isPrivileged, EntraOpsCategory,Categories, RoleMembers, RoleAssignments
+| sort by RoleName asc
+| join kind=inner ( KnownAttackPaths) on RoleId
+| project-away RiskState, UserType, RoleId1
+// Filter for risky or external users only
+| where RiskyAdmins = true or GuestAsAdmins == true
