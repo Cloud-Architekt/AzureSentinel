@@ -7,7 +7,7 @@ let Lookback = 90d;
 // Get list of TenantIds and Classified First Party Apps from WorkloadIdentityInfo
 let FirstPartyAppOwnerTenantId = dynamic(['f8cdef31-a31e-4b4a-93e4-5f571e91255a', '72f988bf-86f1-41af-91ab-2d7cd011db47']);
 let FirstPartyApps = _GetWatchlist('WorkloadIdentityInfo')
-    | where IsFirstPartyApp == "true" or AppOwnerTenantId in~ (FirstPartyAppOwnerTenantId) or AppDisplayName contains "entraops"
+    | where IsFirstPartyApp == "true" or AppOwnerTenantId in~ (FirstPartyAppOwnerTenantId)
     | extend Identity = tostring(ServicePrincipalObjectId)
     | extend AppId = tostring(AppId);
 // Get list of signins from First Party Apps
