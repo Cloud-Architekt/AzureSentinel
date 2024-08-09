@@ -23,19 +23,20 @@ $SentinelResourceGroupName = Get-AutomationVariable -Name 'SentinelResourceGroup
 $SentinelWorkspaceName = Get-AutomationVariable -Name 'SentinelWorkspaceName'
 $ErrorActionPreference = "Stop"
 
-    $WatchListParameters = @{
-        SearchKey         = $null
-        DisplayName       = $null
-        NewWatchlistItems = ""
-        SubscriptionId    = $SentinelSubscriptionId
-        ResourceGroupName = $SentinelResourceGroupName
-        WorkspaceName     = $SentinelWorkspaceName
-        Identifiers       = @("Entra ID", "Automated Enrichment")
-    }
+$WatchListParameters = @{
+    SearchKey         = $null
+    DisplayName       = $null
+    NewWatchlistItems = ""
+    SubscriptionId    = $SentinelSubscriptionId
+    ResourceGroupName = $SentinelResourceGroupName
+    WorkspaceName     = $SentinelWorkspaceName
+    Identifiers       = @("Entra ID", "Automated Enrichment")
+}
 
 try {
     Import-Module "SentinelEnrichment" -ErrorAction Stop
-} catch {
+}
+catch {
     throw "Cannot load module SentinelEnrichment. Please install the module from the PowerShell gallery"
 }
 
@@ -48,7 +49,8 @@ try {
     Connect-MgGraph -Identity -NoWelcome
     $MgContext = Get-MgContext
     Write-Output "Succesfully logged to Tenant $($MgContext.TenantId)"
-} catch {
+}
+catch {
     Write-Error -Message $_.Exception
     throw $_.Exception
 }
@@ -65,7 +67,7 @@ Write-Verbose "Query directory role templates for mapping ID to name and further
 $DirectoryRoleDefinitions = Invoke-GkSeMgGraphRequest -Uri "https://graph.microsoft.com/beta/roleManagement/directory/roleDefinitions" | select-object displayName, templateId, isPrivileged, isBuiltin
 
 Write-Verbose "Query app roles for mapping ID to name"
-$SPObjectWithAppRoles = $ServicePrincipals | where-object {$null -ne $_.AppRoles}
+$SPObjectWithAppRoles = $ServicePrincipals | where-object { $null -ne $_.AppRoles }
 $AppRoles = foreach ($SPObjectWithAppRole in $SPObjectWithAppRoles) {
     $SPObjectWithAppRole.AppRoles | foreach-object {
 
@@ -82,7 +84,8 @@ Write-Verbose "Query list of first party apps"
 try {
     $ProgressPreference = 'SilentlyContinue'
     $FirstPartyApps = Invoke-WebRequest -UseBasicParsing -Method GET -Uri "https://raw.githubusercontent.com/merill/microsoft-info/main/_info/MicrosoftApps.json" | ConvertFrom-Json
-} catch {
+}
+catch {
     Write-Warning "Issue to query list of first party apps from GitHub - $($_.Exception)"
 }
 #endregion
@@ -99,7 +102,8 @@ $ServicePrincipals | ForEach-Object -Parallel {
         Write-Verbose "Query Application of ServicePrincipal `"$($ServicePrincipal.displayName)`""
         try {
             $Application = $using:Applications | Where-Object appId -eq $ServicePrincipal.AppId
-        } catch {
+        }
+        catch {
             Write-Verbose "Can not find app registration for $($ServicePrincipal.DisplayName)"
         }
 
@@ -118,7 +122,8 @@ $ServicePrincipals | ForEach-Object -Parallel {
                 }
             }
             $AssignedAppRoles = $SPRoleAssignments | ConvertTo-Json -Compress -AsArray
-        } catch {
+        }
+        catch {
             Write-Error -Message $_.Exception
             throw $_.Exception
         }
@@ -131,7 +136,8 @@ $ServicePrincipals | ForEach-Object -Parallel {
                 $GroupMemberships.Add($GroupMembership) | Out-Null
             }
             $GroupMemberships = $GroupMemberships | ConvertTo-Json -Compress -AsArray
-        } catch {
+        }
+        catch {
             Write-Error -Message $_.Exception
             throw $_.Exception
         }
@@ -155,14 +161,16 @@ $ServicePrincipals | ForEach-Object -Parallel {
                 }
             }
             $AssignedRoles = $TransitiveRoleAssignments | ConvertTo-Json -Compress -AsArray
-        } catch {
+        }
+        catch {
             Write-Error -Message $_.Exception
             throw $_.Exception
         }
 
         if ( $ServicePrincipal.AppId -in $using:FirstPartyApps.AppId ) {
             $IsFirstPartyApp = $true
-        } else {
+        }
+        else {
             $IsFirstPartyApp = $false
         }
 
@@ -175,6 +183,8 @@ $ServicePrincipals | ForEach-Object -Parallel {
                 "CreatedDateTime"            = $ServicePrincipal.createdDateTime
                 "IsAccountEnabled"           = $ServicePrincipal.accountEnabled
                 "DisabledByMicrosoft"        = $ServicePrincipal.DisabledByMicrosoftStatus
+                "VerifiedPublisher"          = $ServicePrincipal.VerifiedPublisher.DisplayName
+                "PublisherName"              = $ServicePrincipal.PublisherName                
                 "AppOwnerTenantId"           = $ServicePrincipal.AppOwnerOrganizationId
                 "IsFirstPartyApp"            = $IsFirstPartyApp
                 "ServicePrincipalType"       = $ServicePrincipal.servicePrincipalType
@@ -188,7 +198,8 @@ $ServicePrincipals | ForEach-Object -Parallel {
             }
             ($using:NewWatchlistItems).Add( $CurrentItem ) | Out-Null
         }
-    } catch {
+    }
+    catch {
         Write-Warning "Could not add $($ServicePrincipal.displayName) - Error $($_.Exception)"
         Continue
     }
