@@ -1,0 +1,127 @@
+// Overview of all First Party Apps enriched with Sign-in events, activities in Microsoft Graph and Entra ID Audit Logs and enriched with WorkloadIdentityInfo
+// Exclude Tenant specific values such as Correlation ID, IP Addresses for comparing
+// Include also Microsoft apps without AppId from the Audit Logs (AadAuditActivityByUnknown)
+// Requires AuditLogs, MicrosoftGraphActivityLogs and deployment of WorkloadIdentityInfo
+// More details on deploying WorkloadIdentityInfo: https://www.cloud-architekt.net/entra-workload-id-advanced-detection-enrichment/#publish-watchlist-workloadidentityinfo-with-sentinelenrichment
+let Lookback = 90d;
+// Get list of TenantIds and Classified First Party Apps from WorkloadIdentityInfo
+let FirstPartyAppOwnerTenantId = dynamic(['f8cdef31-a31e-4b4a-93e4-5f571e91255a', '72f988bf-86f1-41af-91ab-2d7cd011db47']);
+let FirstPartyApps = _GetWatchlist('WorkloadIdentityInfo')
+    | where IsFirstPartyApp == "true" or AppOwnerTenantId in~ (FirstPartyAppOwnerTenantId) or AppDisplayName contains "entraops"
+    | extend Identity = tostring(ServicePrincipalObjectId)
+    | extend AppId = tostring(AppId);
+// Get list of signins from First Party Apps
+let SignInEvents = FirstPartyApps 
+    | join kind=inner (
+        AADServicePrincipalSignInLogs
+        | where TimeGenerated >ago(Lookback)
+    ) on AppId
+    | summarize UniqueTokenIdentifiers = make_set(UniqueTokenIdentifier), Locations = make_set(Location), Application = make_set(AppDisplayName), Resource = make_set(ResourceDisplayName) by AppId;
+// Get list of Graph Activity from 1st Party Apps
+let GraphActivity = FirstPartyApps
+| join kind=inner (
+MicrosoftGraphActivityLogs
+    | where TimeGenerated > ago(Lookback)
+    // Filter out GET operations
+    | where RequestMethod != "GET"
+    | extend Roles = split(Roles, ' ')
+    | extend Identity = ServicePrincipalId
+    | extend ParsedUri = parse_url(RequestUri)
+    | extend NormalizedRequestUri = tostring(ParsedUri.Path)
+    | extend NormalizedRequestUri = replace_string(NormalizedRequestUri, '//', '/')
+    | extend NormalizedRequestUri = replace_regex(NormalizedRequestUri, @'[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}', @'<UUID>')
+    | extend Operations = bag_pack_columns(
+                        RequestMethod,
+                        NormalizedRequestUri
+                    )
+    | summarize
+        GraphOperations = make_set(Operations)
+        by Identity
+    ) on Identity
+| project AppDisplayName, AppId, AppOwnerTenantId, VerifiedPublisher, GraphOperations, CreatedDateTime, AssignedRoles;
+// Get list of empty initator in Microsoft Entra Audit log which are identifier for other backend jobs
+let AadAuditActivityByUnknown = AuditLogs
+    | where TimeGenerated >ago(Lookback) and InitiatedBy == "{}"
+    | extend OperationId = Id
+    | extend AppDisplayName = Identity
+    | extend AadOperation = bag_pack_columns(
+        ActivityDisplayName,
+        OperationName
+      )
+    | summarize AadOperations = make_set( AadOperation ) by AppDisplayName
+    | extend OperationsActivity = iff(isnotempty(AadOperations), true, false);
+// Get list of Microsoft Entra Audit log from 1st Party Apps
+let AadAuditActivity = _GetWatchlist('WorkloadIdentityInfo')
+    | where IsFirstPartyApp == "true" or AppOwnerTenantId in~ (FirstPartyAppOwnerTenantId)
+    | extend Identity = tostring(AppDisplayName)
+    | join kind=inner ( AuditLogs
+        | extend OperationId = Id
+        | where TimeGenerated >ago(Lookback)
+    ) on Identity
+    | extend AadOperation = bag_pack_columns(
+        ActivityDisplayName,
+        OperationName
+      )
+    | summarize AadOperations = make_set( AadOperation ) by tostring(AppId);
+// Get list of operations to issue credential on 1st Party Apps
+let CredentialOperations = AuditLogs
+    | where TimeGenerated >ago(Lookback)
+    // Captures "Add service principal", "Add service principal credentials", and "Update application - Certificates and secrets management" events
+    | where OperationName has_any ("Add service principal", "Certificates and secrets management", "Update application")
+    | where Result =~ "success"
+    | mv-apply TargetResource = TargetResources on 
+        (
+        where TargetResource.type =~ "Application" or TargetResource.type =~ "ServicePrincipal"
+        | extend
+            TargetName = tostring(TargetResource.displayName),
+            ResourceId = tostring(TargetResource.id),
+            WorkloadIdentityObjectType = tostring(TargetResource.type),
+            keyEvents = TargetResource.modifiedProperties
+        )
+    | mv-apply Property = keyEvents on 
+        (
+        where Property.displayName =~ "KeyDescription" or Property.displayName =~ "FederatedIdentityCredentials"
+        | extend
+            new_value_set = parse_json(tostring(Property.newValue)),
+            old_value_set = parse_json(tostring(Property.oldValue))
+        )
+    | extend diff = set_difference(new_value_set, old_value_set)
+    | where isnotempty(diff)
+    | parse diff with * "KeyIdentifier=" keyIdentifier: string ",KeyType=" keyType: string ",KeyUsage=" keyUsage: string ",DisplayName=" keyDisplayName: string "]" *
+    | where keyUsage =~ "Verify" or isnotempty(parse_json(tostring(diff[0].Audiences))[0])
+    | mv-apply AdditionalDetail = AdditionalDetails on 
+        (
+        where AdditionalDetail.key =~ "User-Agent"
+        | extend UserAgent = tostring(AdditionalDetail.value)
+        )
+    | mv-apply AdditionalDetail = AdditionalDetails on 
+        (
+        where AdditionalDetail.key =~ "AppId"
+        | extend AppId = tostring(AdditionalDetail.value)
+        )
+    | join kind=inner ( FirstPartyApps ) on AppId
+    | extend CredentialName = iff(isnotempty(keyDisplayName), keyDisplayName, diff[0].Name)
+    | extend CredentialIdentifier = iff(isnotempty(keyIdentifier), keyIdentifier, diff[0].Subject)
+    | extend CredentialType = iff(isnotempty(keyType), keyType, keyEvents[0].displayName)
+    | extend CredentialUsage = iff(isnotempty(keyUsage), keyUsage, tostring(diff[0].Audiences))
+    | extend CredentialOperation = bag_pack_columns(
+        TimeGenerated,
+        OperationName,
+        CredentialName,
+        CredentialType,
+        CredentialUsage,
+        UserAgent
+        )
+    | summarize CredentialOperations = make_set(CredentialOperation) by AppId;
+// Merge data from different queries of known Service Principals
+let KnownServicePrincipals = FirstPartyApps
+    | join kind=leftouter ( SignInEvents ) on AppId
+    | join kind=leftouter ( AadAuditActivity ) on AppId
+    | join kind=leftouter ( GraphActivity ) on AppId
+    | join kind=leftouter ( CredentialOperations ) on AppId
+    | extend AddedCredential = iff(isnotempty(CredentialOperations), true, false)
+    | extend SignInActivity = iff(isnotempty(UniqueTokenIdentifiers), true, false)
+    | extend OperationsActivity = iff(isnotempty(GraphOperations) or isnotempty(AadOperations), true, false)
+    | project AppId, AppDisplayName, AppOwnerTenantId, CreatedDateTime, SignInActivity, OperationsActivity, AddedCredential, VerifiedPublisher, Locations, Application, Resource, GraphOperations, AadOperations, CredentialOperations;
+union KnownServicePrincipals, AadAuditActivityByUnknown
+    | sort by tostring(AppDisplayName) asc
