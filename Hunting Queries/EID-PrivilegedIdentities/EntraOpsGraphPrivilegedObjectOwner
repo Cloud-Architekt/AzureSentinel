@@ -1,0 +1,19 @@
+// Uses details of Owned Objects in EntraOps to identify lower privileged users which owns higher privileged objects (TierBreach)
+let Edges = PrivilegedEAM
+    | where isnotempty(OwnedDevices)
+    | extend SourceNodeId = tostring(ObjectId)
+    | mv-expand parse_json(OwnedObjects)
+    | extend TargetNodeId = tostring(OwnedObjects)
+    | project SourceNodeId, SourceNodeName = ObjectId, TargetNodeId, TargetNodeName = tostring(OwnedObjects)
+    | extend EdgeType = "OwnedObject";
+let Nodes = PrivilegedEAM
+    | extend NodeId = tostring(ObjectId)
+    | mv-expand parse_json(Classification)
+    | summarize Classification = make_set(Classification.AdminTierLevelName) by NodeId, NodeDisplayName = ObjectDisplayName, NodeType = ObjectType, ObjectAdminTierLevelName;
+Edges
+| make-graph SourceNodeId --> TargetNodeId with Nodes on NodeId
+| graph-match
+    (Owner)-[Owned*1 .. 10]->(TargetObject)
+    where isnotempty(TargetObject.Classification)
+    project OwnerId = Owner.NodeId, SourceDisplayName = Owner.NodeDisplayName, SourceClassification = tostring(Owner.Classification), Owned.EdgeType, TargetNodeId = tostring(TargetObject.NodeId), TargetObjectId = tostring(TargetObject.NodeDisplayName), TargetClassification = tostring(TargetObject.Classification)
+| extend TierBreach = iff((SourceClassification !has TargetClassification), true, false)
