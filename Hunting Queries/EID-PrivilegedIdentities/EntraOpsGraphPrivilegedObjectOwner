@@ -32,7 +32,7 @@ Edges
 | make-graph SourceObjectId --> TargetObjectId with Nodes on AadObjectId
 | graph-match
     (Owner)-[Owned*1 .. 10]->(TargetObject)
-    project OwnerId = Owner.NodeId, SourceDisplayName = Owner.NodeDisplayName, SourceObjectId = Owner.AadObjectId, SourceNodeLabel = Owner.NodeLabel, SourceCriticality = Owner.CriticalityLevel, SourceRuleNames = Owner.RuleName, EdgeType = Owned.EdgeType, TargetNodeId = tostring(TargetObject.NodeId), TargetObjectId = tostring(TargetObject.AadObjectId), TargetDisplayName = Owner.NodeDisplayName, TargetNodeLabel = TargetObject.NodeLabel
+    project OwnerId = Owner.NodeId, SourceDisplayName = Owner.NodeDisplayName, SourceObjectId = Owner.AadObjectId, SourceNodeLabel = Owner.NodeLabel, SourceCriticality = Owner.CriticalityLevel, SourceRuleNames = Owner.RuleName, EdgeType = Owned.EdgeType, TargetNodeId = tostring(TargetObject.NodeId), TargetObjectId = tostring(TargetObject.AadObjectId), TargetDisplayName = TargetObject.NodeDisplayName, TargetNodeLabel = TargetObject.NodeLabel
 // Get classified privileges from EntraOps to assigned object to AdminTierLevel
 | lookup
     (
