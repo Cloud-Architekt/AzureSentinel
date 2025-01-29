@@ -1,19 +1,58 @@
-// Uses details of Owned Objects in EntraOps to identify lower privileged users which owns higher privileged objects (TierBreach)
+// Filter for specific types of objects
+let SourceNodeLabelFilter = dynamic(["user", "group", "serviceprincipal"]);
+// Get owner relationsship from EntraOps Privileged EAM data
 let Edges = PrivilegedEAM
-    | where isnotempty(OwnedDevices)
-    | extend SourceNodeId = tostring(ObjectId)
-    | mv-expand parse_json(OwnedObjects)
-    | extend TargetNodeId = tostring(OwnedObjects)
-    | project SourceNodeId, SourceNodeName = ObjectId, TargetNodeId, TargetNodeName = tostring(OwnedObjects)
-    | extend EdgeType = "OwnedObject";
-let Nodes = PrivilegedEAM
-    | extend NodeId = tostring(ObjectId)
+    | where isnotempty(Owners)
+    | mv-expand parse_json(Owners)
+    | extend SourceObjectId = tostring(Owners)
+    | extend TargetObjectId = tostring(ObjectId)
+    | extend EdgeType = "OwnedObject"    
     | mv-expand parse_json(Classification)
-    | summarize Classification = make_set(Classification.AdminTierLevelName) by NodeId, NodeDisplayName = ObjectDisplayName, NodeType = ObjectType, ObjectAdminTierLevelName;
+    | extend AdminTierLevel = toint(parse_json(Classification)["AdminTierLevel"])
+    | extend AdminTierLevelName = parse_json(Classification)["AdminTierLevelName"]
+    | summarize arg_min(AdminTierLevel, AdminTierLevelName) by SourceObjectId, TargetObjectId, EdgeType;
+// Get principals from XSPM Nodes filtered by SourceNodeLabelFilter 
+let Nodes = ExposureGraphNodes
+    | where NodeLabel in~ (SourceNodeLabelFilter)
+    | mv-expand parse_json(EntityIds)
+    | where parse_json(EntityIds).type == "AadObjectId"
+    | extend EntityId = tostring(parse_json(EntityIds).id)
+    | extend AadObjectId = tostring(extract("objectid=([\\w-]+)", 1, EntityId))
+    | extend DisplayName = parse_json(NodeProperties)["rawData"]["accountDisplayName"]
+    | extend RuleName = parse_json(NodeProperties)["rawData"]["criticalityLevel"]["ruleNames"]
+    | extend CriticalityLevel = parse_json(NodeProperties)["rawData"]["criticalityLevel"]["criticalityLevel"]    
+    | extend NodeDisplayName = 
+                case(
+                    (NodeLabel == "user" or NodeLabel == "serviceprincipal"), parse_json(NodeProperties)["rawData"]["accountDisplayName"],
+                    NodeLabel == "group", parse_json(NodeProperties)["rawData"]["aadDisplayName"],
+                    ""
+                )
+    | project AadObjectId, NodeId, NodeName, NodeLabel, NodeDisplayName, NodeType = NodeLabel, CriticalityLevel, RuleName;
 Edges
-| make-graph SourceNodeId --> TargetNodeId with Nodes on NodeId
+| make-graph SourceObjectId --> TargetObjectId with Nodes on AadObjectId
 | graph-match
     (Owner)-[Owned*1 .. 10]->(TargetObject)
-    where isnotempty(TargetObject.Classification)
-    project OwnerId = Owner.NodeId, SourceDisplayName = Owner.NodeDisplayName, SourceClassification = tostring(Owner.Classification), Owned.EdgeType, TargetNodeId = tostring(TargetObject.NodeId), TargetObjectId = tostring(TargetObject.NodeDisplayName), TargetClassification = tostring(TargetObject.Classification)
-| extend TierBreach = iff((SourceClassification !has TargetClassification), true, false)
+    project OwnerId = Owner.NodeId, SourceDisplayName = Owner.NodeDisplayName, SourceObjectId = Owner.AadObjectId, SourceNodeLabel = Owner.NodeLabel, SourceCriticality = Owner.CriticalityLevel, SourceRuleNames = Owner.RuleName, EdgeType = Owned.EdgeType, TargetNodeId = tostring(TargetObject.NodeId), TargetObjectId = tostring(TargetObject.AadObjectId), TargetDisplayName = Owner.NodeDisplayName, TargetNodeLabel = TargetObject.NodeLabel
+// Get classified privileges from EntraOps to assigned object to AdminTierLevel
+| lookup
+    (
+        PrivilegedEAM
+        | mv-expand parse_json(Classification)
+        | extend SourceAdminTierLevel = toint(parse_json(Classification)["AdminTierLevel"])
+        | extend SourceAdminTierLevelName = parse_json(Classification)["AdminTierLevelName"]
+        | summarize arg_min(SourceAdminTierLevel, SourceAdminTierLevelName) by SourceObjectId = tostring(ObjectId)
+    ) on SourceObjectId
+| extend SourceAdminTierLevel = iff((isnotempty(SourceAdminTierLevel)), SourceAdminTierLevel, 2)
+| extend SourceAdminTierLevelName = iff((isnotempty(SourceAdminTierLevelName)), SourceAdminTierLevelName, "User Access")
+// Get classified privileges of owner from EntraOps to identify lower privileged users which owns higher privileged objects (TierBreach)
+| lookup 
+    (
+        Edges
+        | extend TargetAdminTierLevel = toint(AdminTierLevel)  
+        | extend TargetAdminTierLevelName = AdminTierLevelName
+        | project TargetObjectId, TargetAdminTierLevel, TargetAdminTierLevelName
+    ) on TargetObjectId
+| extend TargetAdminTierLevel = iff((isnotempty(TargetAdminTierLevel)), TargetAdminTierLevel, 2)
+| extend TargetAdminTierLevelName = iff((isnotempty(TargetAdminTierLevelName)), TargetAdminTierLevelName, "User Access")
+| extend TierLevelBreach = iff(((SourceAdminTierLevelName != TargetAdminTierLevelName) and (SourceAdminTierLevelName != "ControlPlane")), True, False)
+| project TierLevelBreach, SourceDisplayName, SourceObjectId, SourceNodeLabel, SourceCriticality, SourceRuleNames, SourceAdminTierLevelName, EdgeType, TargetDisplayName, TargetObjectId, TargetNodeLabel, TargetAdminTierLevelName
