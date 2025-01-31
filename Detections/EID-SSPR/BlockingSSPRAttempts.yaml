@@ -24,17 +24,36 @@ query: |
   AuditLogs
   | where TimeGenerated >= ago(timeRange)
   | where LoggedByService == "Self-service Password Management" 
-  | where OperationName contains "Blocked"
-  | extend UserPrincipalName = tostring(TargetResources[0].userPrincipalName), SourceIPAddress = tostring(InitiatedBy.user.ipAddress)
-  | project timestamp = TimeGenerated, AccountCustomEntity = UserPrincipalName, IPCustomEntity = SourceIPAddress, OperationName, ResultReason
+  | where OperationName has "blocked" or ResultReason has "blocked"
+  | mv-expand TargetResources
+  | mv-expand InitiatedBy
+  | extend TargetUserPrincipalName = tostring(TargetResources.userPrincipalName)
+  | extend ActorUserPrincipalName = tostring(InitiatedBy.user.userPrincipalName)
+  | extend ActorIPAddress = tostring(InitiatedBy.user.ipAddress)
+  | project TimeGenerated, ActorUserPrincipalName, TargetUserPrincipalName, ActorIPAddress, OperationName, ResultReason
 entityMappings:
   - entityType: Account
     fieldMappings:
       - identifier: FullName
-        columnName: AccountCustomEntity
+        columnName: TargetUserPrincipalName
   - entityType: IP
     fieldMappings:
       - identifier: Address
-        columnName: IPCustomEntity
-version: 1.0.0
+        columnName: ActorIPAddress
+customDetails:
+  OperationName: OperationName
+  ResultReason: ResultReason
+incidentConfiguration:
+  createIncident: true
+  groupingConfiguration:
+    enabled: true
+    reopenClosedIncident: false
+    lookbackDuration: 5m
+    matchingMethod: AllEntities
+    groupByEntities: []
+    groupByAlertDetails: []
+    groupByCustomDetails: []
+eventGroupingSettings:
+  aggregationKind: AlertPerResult
+version: 1.1.0
 kind: Scheduled
