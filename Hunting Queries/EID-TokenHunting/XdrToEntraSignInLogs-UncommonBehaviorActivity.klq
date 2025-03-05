@@ -1,0 +1,15 @@
+// Uncommon Behavior Activity
+// Hunting query to get list of CloudAppEvents with Activities flagged as "UncommonForUser" by tokens which has been acquired in a session with XDR alert.
+// Pre-requisite: Save "XdrToEntraSignInLogs-SessionVerdicts.func" as function with the name SessionVerdicts
+
+let RiskySessions = SessionVerdicts | project UniqueTokenIdentifier;
+CloudAppEvents
+| extend SessionId = tostring(parse_json(RawEventData)["AppAccessContext"]["AADSessionId"])
+| extend CorrelationId = tostring(parse_json(RawEventData)["AppAccessContext"]["CorrelationId"])
+| extend UniqueTokenIdentifier = coalesce(tostring(parse_json(RawEventData)["uniqueTokenId"]), tostring(parse_json(RawEventData)["AppAccessContext"]["UniqueTokenId"]))
+| where UniqueTokenIdentifier in (RiskySessions)
+| extend ActivityInsights = bag_pack_columns(ActivityObjects, ActivityType)
+| extend NetworkInsights = bag_pack_columns(IPAddress, IPCategory, IPTags, ISP, IsAnonymousProxy)
+| extend UserAgentInsights = bag_pack_columns(UserAgent, UserAgentTags)
+| where isnotempty(column_ifexists("UncommonForUser", '')) and UncommonForUser != "[]"
+| project Timestamp, ActionType, Application, IPAddress, IsAdminOperation, UncommonForUser, CorrelationId, UniqueTokenIdentifier

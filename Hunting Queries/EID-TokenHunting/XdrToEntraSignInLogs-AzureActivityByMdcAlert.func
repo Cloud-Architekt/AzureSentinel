@@ -1,0 +1,63 @@
+// Correlation of Defender for Cloud (MDC) Alerts to Azure Activity Log
+// Function to correlate Microsoft Defender for Cloud (MDC) alert to Azure Activity Logs
+// in relation to time window, actor and IP address based on Session-related XDR alert.
+// Pre-requisite: Save "XdrToEntraSignInLogs-SessionVerdicts.func" as function with the name SessionVerdicts
+
+// Get risky session from XDR alerts
+let AzureActivityByMdcAlert = (UserPrincipalName:string, IpAddress:string="", UniqueTokenIdentifier:string="") {
+    let Lookback = 30d;
+    let MdcAlertIds = AlertEvidence
+    | where TimeGenerated >ago(Lookback)
+    | where EntityType == "User" and AccountUpn contains (UserPrincipalName)
+    | where ServiceSource == "Microsoft Defender for Cloud"
+    | summarize by AlertId;
+    // Evidence Query by: https://github.com/ep3p/Sentinel_KQL/blob/main/Temporary/Defender%20XDR%20alert%20evidence%20summarized.kql
+    let MdcAlerts = AlertEvidence
+    | where AlertId in (MdcAlertIds)
+    | where TimeGenerated >ago(Lookback)
+    | project-rename AlertTimestamp = Timestamp
+    | extend AdditionalFields = bag_remove_keys(todynamic(AdditionalFields), dynamic(["MergeByKey", "MergeByKeyHex"]))
+    | extend AdditionalFieldsType = iff(EntityType == "GenericEntity", tostring(AdditionalFields["Type"]), "")
+    | extend AllInfo = bag_remove_keys(pack_all(true), dynamic(["AlertTimestamp", "Title", "Severity", "Categories", "AttackTechniques", "ServiceSource", "DetectionSource", "AlertId","EntityType"]))
+    | extend Packed = bag_remove_keys(AllInfo, dynamic(["EvidenceRole", "EvidenceDirection", "AdditionalFields", "AdditionalFieldsType"]))
+    | extend PackedKeys = bag_keys(Packed)
+    | summarize
+        AllInfo = make_set(AllInfo),
+        EntityList = make_set_if(Packed, array_length(PackedKeys) > 0),
+        EntityKeys = make_set_if(PackedKeys, array_length(PackedKeys) > 0),
+        take_any(AlertTimestamp, Title, Categories, AttackTechniques, ServiceSource, DetectionSource)
+        by AlertId, EntityType
+    | summarize
+        Entities = make_bag(bag_pack(EntityType, AllInfo)),
+        take_any(AlertTimestamp, Title, Categories, AttackTechniques, ServiceSource, DetectionSource)
+        by AlertId;
+    MdcAlerts
+    | extend CallerIpAddress = tostring(parse_json(Entities)["Ip"][0]["RemoteIP"])
+    | extend CallerObjectId = tostring(parse_json(Entities)["User"][0]["AccountObjectId"])
+    | extend AlertResourceEntity = tostring(parse_json(Entities)["CloudResource"][0]["AdditionalFields"]["ResourceId"])
+    // Correlation of MDC Alert with Azure Activity based on ObjectId and CallerIpAddress
+    | join kind=inner ( AzureActivity
+        | where ActivityStatusValue == "Success"
+        | extend ResourceEntity = parse_json(Properties)["entity"]
+        | extend CallerObjectId = tostring(parse_json(Claims).["http://schemas.microsoft.com/identity/claims/objectidentifier"])
+        | project ActivityTimestamp = TimeGenerated, CallerObjectId, CallerIpAddress, ResourceEntity, Properties, Authorization_d, Claims, ArmCorrelationId = CorrelationId
+        | sort by ActivityTimestamp             
+    ) on CallerObjectId, CallerIpAddress
+    // Filter for Activity Time of 1h (default access token lifetime)
+    | where (ActivityTimestamp - AlertTimestamp) between (0min .. 1h)
+    | extend ResourceEntitiy = parse_json(Properties)["entity"]
+    | extend ResourceEntityMatch = iff(ResourceEntity startswith (AlertResourceEntity), "AlertRelated", "Other")
+    | extend ClaimsIpAddress = parse_json(Claims)["ipaddr"]
+    | project-rename AzureAuthorization = Authorization_d    
+    | extend UniqueTokenIdentifier = tostring(parse_json(Claims)["uti"])
+    | extend ArmResourceId = parse_json(Properties)["entity"]
+    | extend ArmAction = parse_json(Properties)["message"]
+    | sort by ActivityTimestamp
+    | extend Action = bag_pack_columns(ActivityTimestamp, ArmAction, ArmResourceId, ArmCorrelationId)
+    | summarize ArmAction = make_set(Action) by AlertTimestamp, AlertId, AlertTitle = Title, Categories, AttackTechniques, ServiceSource, DetectionSource, CallerObjectId, CallerIpAddress, UniqueTokenIdentifier, AlertResourceEntity
+    | where UniqueTokenIdentifier contains (UniqueTokenIdentifier)
+};
+let TokensFromRiskySessions = SessionVerdicts | mv-expand UniqueTokenIdentifier | project AlertName, tostring(UniqueTokenIdentifier);
+AzureActivityByMdcAlert(UserPrincipalName="")
+// Correlation if token is part of risky session
+| join kind=inner ( TokensFromRiskySessions ) on UniqueTokenIdentifier

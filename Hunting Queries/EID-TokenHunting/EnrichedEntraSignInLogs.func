@@ -1,0 +1,186 @@
+// Enrichment of Microsoft Entra Sign-In Logs
+// Function to enrich and group detailed information about authentication (context) details, token protection, delegated permissions and compliant network details
+// Pre-requisites: Adjustmnet of static parameters of Conditional Access Policy Displaynames
+
+let EnrichedEntraSignInLogs = (UserPrincipalName:string, UserDeviceName:string="", UserSessionId:string="") {
+    // Static parameters for Entra environment
+        let CaPolicyBlockedOutsideGsa = '<DisplayNameOfConditionalAccessPolicyForBlockedOutsideOfGSA>';
+        let CaPolicyTokenProtectionApplied = '<DisplayNameOfConditionalAccessPolicyForApplyTokenProtectionForSupportedCloudApps>';
+        let CaPolicyTokenProtectionApplicable = '<DisplayNameOfConditionalAccessPolicyForReportOnlyTokenProtectionForAllCloudApps>';
+        let CaPolicyStrictlyCaeLocationPolicy = '<DisplayNameOfConditionalAccessPolicyForApplyStrictlyCaeLocationPolicies>';
+    // External lookup to get list of FOCI applications
+    let FociClientApplications = (externaldata(client_id: string)
+        [@"https://raw.githubusercontent.com/secureworks/family-of-client-ids-research/refs/heads/main/known-foci-clients.csv"] with (format="csv", ignoreFirstRecord=true)
+        | project-rename FociClientId = client_id
+        );
+    //External lookup for classification of delegated Graph API Permissions
+    let HighSensitiveMsGraphPermissions = externaldata(EAMTierLevelName: string, Category: string, AppRoleDisplayName: string)
+        ["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_AppRoles.json"] with(format='multijson')
+        | where EAMTierLevelName == "ControlPlane"
+        | project AppRoleDisplayName;
+    // External lookup for ErrorCode description
+    let ErrorCodes = (externaldata(ResultType: int, Message: string)
+        [@"https://raw.githubusercontent.com/f-bader/EntraID-ErrorCodes/refs/heads/main/EntraIDErrorCodes.csv"] with (format="csv", ignoreFirstRecord=true)
+        | project-rename SignInErrorDescription = Message, SignInErrorCode = ResultType
+        | project SignInErrorCode, SignInErrorDescription
+        );
+    // Definition of sensitive AuthenticationContextClassReferences
+    let SensitiveAuthContextClasses = datatable(AuthContextId:string, AuthContextName:string) [
+            "c7", "Require Reauthentication",
+            "c10", "Require PAW for Global Admin"
+        ];
+    // Definition of explicitly excluded apps from Compliant Network
+        let ExplicitlyGsaExcludedCloudAppIds = dynamic([
+            "372140e0-b3b7-4226-8ef9-d57986796201", // Azure Windows VM Sign-In
+            "0000000a-0000-0000-c000-000000000000", // Microsoft Intune
+            "d4ebce55-015a-49b5-a083-c84d1797ae8c"  // Microsoft Intune Enrollment
+        ]);
+    AADSignInEventsBeta
+        | project-rename SignInTime = TimeGenerated
+    // Filter for internal users only
+        | where IsGuestUser == false
+    // Filter for user, device or session
+        | where tolower(AccountUpn) contains (UserPrincipalName)
+        | where tolower(DeviceName) contains (UserDeviceName)
+        | where tolower(SessionId) contains (UserSessionId)
+        | project SignInTime, Timestamp, OriginalRequestId = RequestId, CorrelationId = ReportId, NetworkLocationDetails, SessionId, Country, ErrorCode, EndpointCall, ConditionalAccessPolicies, ConditionalAccessStatus
+        | join kind=inner (
+            union SigninLogs, AADNonInteractiveUserSignInLogs
+            | project-rename SignInTime = CreatedDateTime
+        ) on SignInTime, OriginalRequestId, CorrelationId
+    // Enrichment Device Insights
+        | extend DeviceDetail = iff(isempty( DeviceDetail_dynamic ), todynamic(DeviceDetail_string), DeviceDetail_dynamic)
+        | extend TokenProtectionStatus = iff(isempty( TokenProtectionStatusDetails_dynamic ), todynamic(TokenProtectionStatusDetails_string), TokenProtectionStatusDetails_dynamic)
+        | extend SignInSessionStatus = TokenProtectionStatus.signInSessionStatus, SignInSessionStatusCode = TokenProtectionStatus.signInSessionStatusCode
+        | extend DeviceName = tostring(tolower(DeviceDetail.displayName))
+        | extend DeviceId = tostring(tolower(DeviceDetail.deviceId))
+        | extend DeviceOS = tostring(parse_json(DeviceDetail).operatingSystem)
+        | extend DeviceTrust = tostring(parse_json(DeviceDetail).trustType)
+        | extend DeviceCompliance = tostring(parse_json(DeviceDetail).isCompliant)
+        | extend DeviceInsights = bag_pack_columns(DeviceId, DeviceName, DeviceTrust, DeviceCompliance)
+    // Enrichment Authentication Insights
+        | extend SignInType = iff(IsInteractive == true, "Interactive", "NonInteractive")
+        | extend AuthenticationMethod = tostring(parse_json(AuthenticationDetails)[0].authenticationMethod)
+        | extend AuthenticationDetail = tostring(parse_json(AuthenticationDetails)[0].authenticationStepResultDetail)
+        | extend AuthProcessDetails = replace_string(AuthenticationProcessingDetails, " " , "")
+        | extend AuthProcessDetails = replace_string(AuthProcessDetails, "\r\n" , "")
+        | parse AuthProcessDetails with * "IsClientCapable\",\"value\":\"" IsClientCapable "\"" *
+        | parse AuthProcessDetails with * "IsCAEToken\",\"value\":\"" IsCaeToken "\"" *
+        | parse AuthProcessDetails with * "OauthScopeInfo\",\"value\":\"" OauthScopeInfo "\"}" *
+        | extend OauthScope = replace_string(OauthScopeInfo, '\\', '')
+        | extend HighSensitiveScope = iff((OauthScope has_any (HighSensitiveMsGraphPermissions)), "ControlPlane", "")
+        | extend AuthInsights = bag_pack_columns(AuthenticationMethod, AuthenticationDetail, AuthenticationRequirement, ClientAppUsed, EndpointCall, IsInteractive, IsClientCapable, OauthScope, HighSensitiveScope, TokenIssuerType)
+    // Enrichment Network Insights
+        | project-rename GsaIpAddress = GlobalSecureAccessIpAddress
+        | extend NetworkInsights = bag_pack_columns(IPAddress, GsaIpAddress, IPAddressFromResourceProvider, AutonomousSystemNumber, NetworkLocationDetails, Country)
+    // Enrichment GSA Insights
+        | mv-apply ConditionalAccessPolicyGsa = parse_json(ConditionalAccessPolicies) to typeof(dynamic) on (
+            where ConditionalAccessPolicyGsa.displayName startswith (CaPolicyBlockedOutsideGsa)
+        )
+        | extend GsaEnforcedResourceScope =  case(
+            (
+                (AppId in~ (ExplicitlyGsaExcludedCloudAppIds) or ResourceIdentity in~ (ExplicitlyGsaExcludedCloudAppIds)) and
+                parse_json(ConditionalAccessPolicyGsa)["excludeRulesSatisfied"] has 'appId')
+            , "ExplicitlyExcluded",
+                (parse_json(ConditionalAccessPolicyGsa)["includeRulesSatisfied"] has AppId)
+            , "ExplicitlyIncluded",
+                parse_json(ConditionalAccessPolicyGsa)["includeRulesSatisfied"] has 'allApps' and
+                parse_json(ConditionalAccessPolicyGsa)["excludeRulesSatisfied"] !has 'appId'
+            , "AllAppsIncluded",
+                (AppId !in~ (ExplicitlyGsaExcludedCloudAppIds) or ResourceIdentity !in~ (ExplicitlyGsaExcludedCloudAppIds)) and
+                parse_json(ConditionalAccessPolicyGsa)["excludeRulesSatisfied"] has 'appId'
+            , "MicrosoftExcluded", "Unknown"
+            )
+        | extend GsaEnforcedExplicitlyExcludedCloudApp = iff((AppId in~ (ExplicitlyGsaExcludedCloudAppIds) or ResourceIdentity in~ (ExplicitlyGsaExcludedCloudAppIds)), True, False)
+        | extend GsaEnforcedUserScope =  case(
+            (
+                parse_json(ConditionalAccessPolicyGsa)["excludeRulesSatisfied"] has 'userId')
+            , "ExplicitlyExcluded",
+                (parse_json(ConditionalAccessPolicyGsa)["includeRulesSatisfied"] has 'userId')
+            , "ExplicitlyIncluded",
+                parse_json(ConditionalAccessPolicyGsa)["includeRulesSatisfied"] has 'allUsers' and
+                parse_json(ConditionalAccessPolicyGsa)["excludeRulesSatisfied"] !has 'userId'
+            , "AllUsersIncluded",
+                parse_json(ConditionalAccessPolicyGsa)["includeRulesSatisfied"] !has 'allUsers' and
+                (parse_json(ConditionalAccessPolicyGsa)["includeRulesSatisfied"] !has 'userId') and
+                parse_json(ConditionalAccessPolicyGsa)["excludeRulesSatisfied"] !has 'userId'
+            , "UserNotIncluded", "Unknown"
+        )
+        | extend IsGsaEnforced =  iff(
+            (
+                parse_json(ConditionalAccessPolicyGsa)["result"] == 'notApplied' and
+                parse_json(ConditionalAccessPolicyGsa)["excludeRulesSatisfied"] has 'locationId' and
+                parse_json(ConditionalAccessPolicyGsa)["enforcedGrantControls"][0] == 'Block'
+            ), True, False)
+        | join kind = leftouter ( NetworkAccessTraffic
+            | project TimeGenerated, TransactionId, ConnectionId, IPAddress = SourceIp, AgentVersion, UserId, DeviceId, UniqueTokenIdentifier = UniqueTokenId, InitiatingProcessName
+        ) on UserId, DeviceId, UniqueTokenIdentifier, IPAddress
+        | extend IsThroughGlobalSecureAccess = iff(isnotempty(TransactionId), "true", "false")
+    // Enrichment Token Protection Insights Insights
+        | mv-apply ConditionalAccessPolicyTokenProtection = parse_json(ConditionalAccessPolicies) to typeof(dynamic) on (
+            where ConditionalAccessPolicyTokenProtection.displayName startswith (CaPolicyTokenProtectionApplied)
+        )
+        | extend IsTokenProtected =  iff(
+            (
+                parse_json(ConditionalAccessPolicyTokenProtection)["enforcedSessionControls"] has 'SignInTokenProtection' and
+                parse_json(ConditionalAccessPolicyTokenProtection)["result"] == 'success' and
+                SignInSessionStatus != 'unbound'
+            ), True, False)
+        | mv-apply ConditionalAccessPolicyTokenProtectionApplicable = parse_json(ConditionalAccessPolicies) to typeof(dynamic) on (
+            where ConditionalAccessPolicyTokenProtectionApplicable.displayName startswith (CaPolicyTokenProtectionApplicable)
+        )
+        | extend IsTokenProtectionApplicable = case(
+                (parse_json(ConditionalAccessPolicyTokenProtectionApplicable)["enforcedSessionControls"] has 'SignInTokenProtection' and
+                parse_json(ConditionalAccessPolicyTokenProtectionApplicable)["result"] == 'reportOnlySuccess') and
+                SignInSessionStatus != 'unbound', "Yes",
+                (parse_json(ConditionalAccessPolicyTokenProtectionApplicable)["enforcedSessionControls"] has 'SignInTokenProtection' and
+                parse_json(ConditionalAccessPolicyTokenProtectionApplicable)["result"] == 'reportOnlyFailure'), "No", "Unknown"
+            )
+    // Enrichment CAE Insights
+        | mv-apply ConditionalAccessPolicyStrictlyCae = parse_json(ConditionalAccessPolicies) to typeof(dynamic) on (
+            where ConditionalAccessPolicyStrictlyCae.displayName startswith (CaPolicyStrictlyCaeLocationPolicy)
+        )
+        | extend IsBlockedByCaeStrictlyLocationPolicy = case(
+                (parse_json(ConditionalAccessPolicyStrictlyCae)["excludeRulesSatisfied"] !has 'appId' and
+                parse_json(ConditionalAccessPolicyStrictlyCae)["enforcedSessionControls"] has 'ContinuousAccessEvaluation' and
+                parse_json(ConditionalAccessPolicyStrictlyCae)["includeRulesSatisfied"] has 'locationId' and
+                parse_json(ConditionalAccessPolicyStrictlyCae)["enforcedGrantControls"] has 'Block' and
+                parse_json(ConditionalAccessPolicyStrictlyCae)["result"] == 'failure'), "Success",
+                (parse_json(ConditionalAccessPolicyStrictlyCae)["excludeRulesSatisfied"] has 'locationId' and
+                parse_json(ConditionalAccessPolicyStrictlyCae)["excludeRulesSatisfied"] !has 'appId' and
+                parse_json(ConditionalAccessPolicyStrictlyCae)["enforcedSessionControls"] == 'ContinuousAccessEvaluation' and
+                parse_json(ConditionalAccessPolicyStrictlyCae)["enforcedGrantControls"] has 'Block' and
+                parse_json(ConditionalAccessPolicyStrictlyCae)["result"] == 'notApplied'), "Passed",
+                (parse_json(ConditionalAccessPolicyStrictlyCae)["excludeRulesSatisfied"] has 'appId' and
+                parse_json(ConditionalAccessPolicyStrictlyCae)["enforcedSessionControls"] has 'ContinuousAccessEvaluation' and
+                parse_json(ConditionalAccessPolicyStrictlyCae)["enforcedGrantControls"] has 'Block' and
+                parse_json(ConditionalAccessPolicyStrictlyCae)["result"] == 'notApplied'), "ExcludedApp",
+                (parse_json(ConditionalAccessPolicyStrictlyCae)["includeRulesSatisfied"] has 'allLocations' and
+                parse_json(ConditionalAccessPolicyStrictlyCae)["excludeRulesSatisfied"] !has 'appId' and
+                parse_json(ConditionalAccessPolicyStrictlyCae)["enforcedSessionControls"] has 'ContinuousAccessEvaluation' and
+                parse_json(ConditionalAccessPolicyStrictlyCae)["enforcedGrantControls"] has 'Block' and
+                parse_json(ConditionalAccessPolicyStrictlyCae)["result"] == 'notApplied'), "ExcludedUserOrDevice", "False"
+            )
+        | extend TokenProtectionInsights = bag_pack_columns(IsTokenProtected, IsTokenProtectionApplicable, SignInSessionStatus, SignInSessionStatusCode)
+        | extend CaeInsights = bag_pack_columns(IsCaeToken, IsBlockedByCaeStrictlyLocationPolicy)
+        | extend GsaInsights = bag_pack_columns(IsThroughGlobalSecureAccess, IsGsaEnforced, GsaEnforcedResourceScope, GsaEnforcedUserScope, GsaEnforcedExplicitlyExcludedCloudApp, TransactionId, ConnectionId, AgentVersion, InitiatingProcessName)
+    // FOCI Enrichment
+        | join kind=leftouter ( FociClientApplications ) on $left.AppId == $right.FociClientId
+        | extend IsFoci = iff((AppId == FociClientId), "true", "false")
+    // FOCI Enrichment
+        | project-rename SignInErrorCode = ErrorCode
+        | join kind=leftouter ( ErrorCodes ) on SignInErrorCode
+    // AuthenticationContext
+        | mv-apply SensitiveAuthContextInsight = parse_json(AuthenticationContextClassReferences) to typeof(dynamic) on (
+            where SensitiveAuthContextInsight.id in~ (SensitiveAuthContextClasses)
+            | extend SensitiveAuthContextClassId = tostring(SensitiveAuthContextInsight.id)
+            | extend AuthContextDetail = tostring(parse_json(SensitiveAuthContextInsight)["detail"])
+            | summarize SensitiveAuthContextInsights = make_bag(bag_pack_columns(SensitiveAuthContextClassId, AuthContextDetail))
+            )
+    | sort by SignInTime
+    | project SignInTime, SignInType, SignInErrorCode, SignInErrorDescription, UserPrincipalName, UserId, CaStatus = ConditionalAccessStatus, CorrelationId, OriginalRequestId, SessionId, UniqueTokenIdentifier, AppId, AppDisplayName, IsFoci, ResourceId = ResourceIdentity, ResourceDisplayName, RiskLevelDuringSignIn, AuthInsights, CaeInsights, DeviceInsights, GsaInsights, NetworkInsights, SensitiveAuthContextInsights, TokenProtectionInsights
+};
+EnrichedEntraSignInLogs(UserPrincipalName="",UserDeviceName="",UserSessionId="")
+// Filtering for unbounded (unprotected) tokens outside of GSA with sensitive (delegated) API Permission scope
+| where parse_json(TokenProtectionInsights)["IsTokenProtected"] == 'false' and parse_json(AuthInsights)["HighSensitiveScope"] == 'ControlPlane' and parse_json(GsaInsights)["IsThroughGlobalSecureAccess"] == 'false'
+| sort by SignInTime asc
