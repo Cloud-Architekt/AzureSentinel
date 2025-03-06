@@ -1,0 +1,138 @@
+// Sensitive Privileged Endpoint Activity (Microsoft Graph and Azure Resource Manager API)
+// Function to get sensitive actions by external lookup to a classification file
+// and sensitive scope by identify critical assets in Microsoft Security Exposure Management.
+// Insights of uncommon activites for User will be enriched by CloudAppActivity Logs.
+// Details about activity outside of Global Secure Access will be identified by correlation to
+// NetworkAccessTraffic Log by mapping URL, IP and DeviceId.
+
+let SensitivePrivilegedInterfaceActivity = (Entity:string="", CaPolicyBlockedOutsideGsa:string="", FilterByUniqueTokenIdentifier:string="", FilteredByActivityIpAddress:string="") {
+    let XspmCriticalAssets = ExposureGraphNodes
+    | mv-expand EntityIds
+    | extend EntityType = parse_json(EntityIds)
+    | where EntityType["type"] == "AadObjectId" or EntityType["type"] == "AzureResourceId"
+    | mv-expand CriticalityData = parse_json(NodeProperties)["rawData"]["criticalityLevel"]["ruleNames"]
+    | extend CriticalityLevel = tostring(parse_json(NodeProperties)["rawData"]["criticalityLevel"]["criticalityLevel"])
+    | extend RuleName = tostring(CriticalityData)
+    | extend ObjectId = iff(EntityType["type"] == "AadObjectId", tolower(tostring(extract("objectid=([\\w-]+)", 1, tostring(parse_json(EntityIds)["id"])))), tolower(tostring(EntityType["id"])))
+    | where isnotempty(CriticalityLevel)
+    | project ObjectId, ObjectIdType = EntityType["type"], NodeId, NodeName, RuleName, CriticalityLevel
+    ;
+    let XspmCriticalAzResourceIds = XspmCriticalAssets | where ObjectIdType == "AzureResourceId";
+    let XspmCriticalAadObjectIds = XspmCriticalAssets | where ObjectIdType == "AadObjectId";
+    let PrivilegedInterfaces = datatable (ResourceDisplayName:string, Url:string) [
+        "Azure Resource Manager", "management.azure.com",
+        "Microsoft Graph", "graph.microsoft.com"
+    ];
+    let PrivilegedInterfacesAllUrls = dynamic(['graph.microsoft.com','management.azure.com']);
+    let PrivilegedArmOperations = (externaldata(RoleAction:string)
+        [@"https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/refs/heads/main/PrivilegedOperations/ArmApiRequest.csv"] with (format="csv", ignoreFirstRecord=true)
+    );
+    let PrivilegedArmOperationsPattern = @"Microsoft\.Authorization/.*/action";
+    let PrivilegedGraphOperationsUri = (externaldata(Uri:string)
+        [@"https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/refs/heads/main/PrivilegedOperations/GraphApiRequest.csv"] with (format="csv", ignoreFirstRecord=true)
+    );
+    let PrivilegedGraphOperationsExcluded = dynamic([
+        '/beta/roleManagement/directory/estimateAccess'
+    ]);
+    let PrivilegedGraphOperations = dynamic([
+        'PATCH',
+        'POST',
+        'DELETE'
+    ]);
+    let SignInWithConnections = union SigninLogs, AADNonInteractiveUserSignInLogs
+    | where UserPrincipalName == (Entity) or UserId == (Entity)
+    // Extending Auth processing details for CAE
+    | extend AuthProcessDetails = replace_string(AuthenticationProcessingDetails, " ", "")
+    | extend AuthProcessDetails = replace_string(AuthProcessDetails, "\r\n", "")
+    | parse-where AuthProcessDetails with * "IsCAEToken\",\"value\":\"" IsTokenCAE"\"" *
+    // General filtering of sign-in events
+    | where UniqueTokenIdentifier contains (FilterByUniqueTokenIdentifier)
+    | where ResourceDisplayName in~ (PrivilegedInterfaces)
+    // Enrichment of device and user details
+    | extend DeviceDetail = iff(isempty( DeviceDetail_dynamic ), todynamic(DeviceDetail_string), DeviceDetail_dynamic)
+    | extend DeviceName = tostring(toupper(DeviceDetail.displayName))
+    | extend DeviceId = iff(isnotempty(parse_json(DeviceDetail).deviceId), tostring(parse_json(DeviceDetail).deviceId), "Unknown")
+    | extend DeviceOS = tostring(parse_json(DeviceDetail).operatingSystem)
+    | extend DeviceTrust = tostring(parse_json(DeviceDetail).trustType)
+    | extend DeviceCompliance = tostring(parse_json(DeviceDetail).isCompliant)
+    | extend DeviceInsights = bag_pack_columns(DeviceName, DeviceTrust, DeviceCompliance)    
+    // Enrichment of authentication details
+    | extend AuthenticationMethod = tostring(parse_json(AuthenticationDetails)[0].authenticationMethod)
+    | extend AuthenticationDetail = tostring(parse_json(AuthenticationDetails)[0].authenticationStepResultDetail)
+    | extend JsonAuthCaeDetails = parse_json(AuthenticationProcessingDetails)
+    | extend AuthInsights = bag_pack_columns(AuthenticationMethod, AuthenticationDetail)
+    | extend SignInIpAddress = IPAddress
+    // Enrichment of CA policy status
+    | extend ConditionalAccessPolicies = iff(isempty( ConditionalAccessPolicies_dynamic ), todynamic(ConditionalAccessPolicies_string), ConditionalAccessPolicies_dynamic)
+    | mv-apply ConditionalAccessPolicies on (
+        where ConditionalAccessPolicies.displayName startswith (CaPolicyBlockedOutsideGsa)
+    )
+    | extend GsaCaStatus = ConditionalAccessPolicies.result
+    | join kind=inner ( PrivilegedInterfaces ) on ResourceDisplayName
+    // Correlation to GSA can't be established by SessionId (currently missing), connections with available identifier will be used in the TimeRange window will be used
+    | join kind=leftouter (
+        NetworkAccessTraffic
+        | where DestinationFqdn in~ (PrivilegedInterfacesAllUrls)
+        | summarize GsaSourceIPs = make_set(SourceIp) by UserId, DeviceId, Url = DestinationFqdn
+    ) on UserId, DeviceId, Url
+    | project SignInTime = CreatedDateTime, SessionId, ResultType, ResultDescription, TimeGenerated, CorrelationId, OriginalRequestId, UniqueTokenIdentifier, AppId, AppDisplayName, ResourceId = ResourceIdentity, ResourceDisplayName, Category, SignInIpAddress = IPAddress, DeviceInsights, AuthInsights, AuthenticationProcessingDetails, RiskLevelDuringSignIn, SignInIdentifierType, GsaSourceIPs, GsaCaStatus, AuthProcessDetails, IsTokenCAE, UserPrincipalName
+    | sort by SignInTime desc;
+    let GraphActivity = SignInWithConnections
+    | join kind=inner ( MicrosoftGraphActivityLogs
+        | where ClientAuthMethod == "0"
+        | extend ParsedUri = parse_url(RequestUri)
+        | extend NormalizedRequestUri = tostring(ParsedUri.Path)
+        | extend NormalizedRequestUri = replace_string(NormalizedRequestUri, '//', '/')
+        | extend RequestTargetAadObjectId = extract(@'[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}', 0, NormalizedRequestUri)
+        | extend NormalizedRequestUri = replace_regex(NormalizedRequestUri, @'[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}', @'<UUID>'), ParsedUri
+        | join kind=leftouter ( CloudAppEvents
+            | where Application == "Microsoft 365"
+            | mv-apply ActivityObjects = parse_json(ActivityObjects) to typeof(dynamic) on (
+                where ActivityObjects.Role == "Target object"
+            )
+            | extend ActivityTargetAadObjectId = parse_json(ActivityObjects)["Id"], ActivityTargetAadObjectType = parse_json(ActivityObjects)["Type"]
+            | extend OperationId = tostring(parse_json(RawEventData)["IntraSystemId"])
+            | summarize ActivityTargetAadObjectIds = make_set(ActivityTargetAadObjectId), UncommonForUser = make_set(UncommonForUser) by OperationId, Application, SourceSystem
+        ) on OperationId
+        | extend TargetAadObjectIds = bag_pack_columns(ActivityTargetAadObjectIds, RequestTargetAadObjectId)
+        | extend IsSensitiveTarget = iff(TargetAadObjectIds has_any (XspmCriticalAadObjectIds), "true", "false")
+        | extend IsSensitiveAction = iff((NormalizedRequestUri has_any(PrivilegedGraphOperationsUri) and NormalizedRequestUri !in (PrivilegedGraphOperationsExcluded) and RequestMethod in~ (PrivilegedGraphOperations)) == true, "true", "false")
+        | extend GraphOperations = bag_pack_columns(ActivityTime = TimeGenerated, RequestId, OperationId, ClientRequestId, UserAgent, RequestUri, ActivityTargetAadObjectIds, ResponseSizeBytes, UserAgent, IsSensitiveAction, IsSensitiveTarget, UncommonForUser)
+        | summarize Operations = make_set(GraphOperations) by ActivityIpAddress = IPAddress, tostring(TokenIssuedAt), UniqueTokenIdentifier = SignInActivityId, IsSensitiveAction, IsSensitiveTarget
+    ) on UniqueTokenIdentifier
+    | project-away UniqueTokenIdentifier1
+    | extend OutsideOfGsa = iff((GsaSourceIPs !has ActivityIpAddress), true, false);
+    let AzureActivity = SignInWithConnections
+    | join kind=inner ( CloudAppEvents
+        | where Application == "Microsoft Azure"
+        | extend UniqueTokenIdentifier = tostring(RawEventData.uniqueTokenId)
+        | extend TokenIssuedAt = tostring(parse_json(tostring(RawEventData.claims)).iat)
+        | extend ClientIpAddress = tostring(parse_json(tostring(RawEventData.httpRequest)).clientIpAddress)
+        | extend CorrelationId = RawEventData.ActivityId
+        | extend OperationNameValue = parse_json(tostring(RawEventData.properties)).message
+        | extend ResourceEntity = ObjectId
+        | extend IsSensitiveTarget = iff((ResourceEntity has_any (XspmCriticalAzResourceIds)) == true, "true", "false")
+        | extend IsSensitiveAction = iff((OperationNameValue has_any (PrivilegedArmOperations) or OperationNameValue matches regex (PrivilegedArmOperationsPattern)) == true, "true", "false")
+        | extend ArmOperations = bag_pack_columns(ActivityTime = TimeGenerated, CorrelationId, OperationNameValue, ResourceId = ObjectId, IsSensitiveAction, IsSensitiveTarget, UncommonForUser)
+        | summarize Operations = make_set(ArmOperations) by ActivityIpAddress = ClientIpAddress, TokenIssuedAt, UniqueTokenIdentifier
+    ) on UniqueTokenIdentifier
+    | project-away UniqueTokenIdentifier1
+    | extend OutsideOfGsa = iff((GsaSourceIPs !has ActivityIpAddress), true, false);
+    union AzureActivity, GraphActivity
+    | sort by SignInTime desc
+    | where ActivityIpAddress contains (FilteredByActivityIpAddress)
+    | project-reorder SignInTime, SessionId, UserPrincipalName, SignInIpAddress, ActivityIpAddress, OutsideOfGsa, IsTokenCAE
+    // Filter for sensitive Actions outside of GSA
+    // Correlation to GSA can't be established by SessionId (currently missing), connections with available identifier will be used in the TimeRange window will be used
+    | where OutsideOfGsa == true
+    | mv-expand parse_json(Operations)
+    | where Operations.IsSensitiveAction == "true" or Operations.IsSensitiveScope == "true" | project-reorder Operations
+    | extend Action = iff(isnotempty(parse_json(Operations)["OperationNameValue"]), parse_json(Operations)["OperationNameValue"], parse_json(Operations)["RequestUri"])
+    | project-rename ActionDetails = Operations
+    | project-reorder TimeGenerated, UserPrincipalName, SessionId, UniqueTokenIdentifier, ResourceDisplayName, Action, ActionDetails
+};
+// Definition of of User and related Conditional Access Policy to block access outside of compliant network
+SensitivePrivilegedInterfaceActivity(
+    Entity="<UserPrincipalNameOrUserId>",
+    CaPolicyBlockedOutsideGsa="<DisplayNameOfConditionalAccessPolicyForBlockedOutsideOfGSA>"
+)

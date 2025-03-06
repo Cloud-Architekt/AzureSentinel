@@ -1,0 +1,57 @@
+// Suspicious issued refresh token outside of token broker
+// Hunting query which helps to identify bounded refresh tokens without using
+// Primary Refresh Token on a compliant device without involved PRT or Authentication Broker in the past 14 days
+
+// External lookup to get list of FOCI applications
+let FociClientApplications = (externaldata(client_id: string)
+        [@"https://raw.githubusercontent.com/secureworks/family-of-client-ids-research/refs/heads/main/known-foci-clients.csv"] with (format="csv", ignoreFirstRecord=true)
+        | project-rename FociClientId = client_id
+);
+union SigninLogs, AADNonInteractiveUserSignInLogs
+// Optional: Filter for specific time window, user and only successful sign-ins
+// | where UserPrincipalName == "<UserPrincipalName>"
+//         and CreatedDateTime between ( todatetime('<StartTime>') .. todatetime('<EndTime>') )
+//         and ResultType == "0"
+// Filter for sign-ins to home tenant only
+| where HomeTenantId == ResourceTenantId
+// Enrichment of device details
+| extend DeviceDetail = iff(isempty( DeviceDetail_dynamic ), todynamic(DeviceDetail_string), DeviceDetail_dynamic)
+| extend DeviceId = tostring(tolower(DeviceDetail.deviceId))
+| extend DeviceName = tostring(toupper(DeviceDetail.displayName))
+// Enrichment of token protection details
+| extend TokenProtectionStatus = iff(isempty( TokenProtectionStatusDetails_dynamic ), todynamic(TokenProtectionStatusDetails_string), TokenProtectionStatusDetails_dynamic)
+| extend SignInSessionStatus = tostring(TokenProtectionStatus.signInSessionStatus)
+| where IncomingTokenType == "none" and SignInSessionStatus == "bound"
+// Filter for Conditional Access Device Compliance which enforces to use PRT for device identity
+| extend ConditionalAccessPolicy = iff(isempty( ConditionalAccessPolicies_dynamic ), todynamic(ConditionalAccessPolicies_string), ConditionalAccessPolicies_dynamic)
+| where ConditionalAccessPolicy has "RequireCompliantDevice"
+    | mv-apply ConditionalAccessPolicyDeviceCompliance = parse_json(ConditionalAccessPolicy) to typeof(dynamic) on (
+        where ConditionalAccessPolicyDeviceCompliance.enforcedGrantControls contains "RequireCompliantDevice" and ConditionalAccessPolicyDeviceCompliance.result == "success"
+    )
+| extend CaDeviceCompliance = tostring(ConditionalAccessPolicyDeviceCompliance.result)
+// Lookup for FOCI client
+| join kind=leftouter ( FociClientApplications ) on $left.AppId == $right.FociClientId
+| extend IsFoci = iff((AppId == FociClientId), "true", "false")
+// Correlation with GSA network traffic
+| join kind = leftouter ( NetworkAccessTraffic
+    | project TimeGenerated, TransactionId, ConnectionId, IPAddress = SourceIp, AgentVersion, UserId, DeviceId, UniqueTokenIdentifier = UniqueTokenId, InitiatingProcessName
+) on UserId, DeviceId, UniqueTokenIdentifier, IPAddress
+| extend IsThroughGlobalSecureAccess = iff(isnotempty(TransactionId), true, false)
+// Enrichment Authentication Insights
+    | extend SignInType = iff(IsInteractive == true, "Interactive", "NonInteractive")
+    | extend AuthenticationMethod = tostring(parse_json(AuthenticationDetails)[0].authenticationMethod)
+    | extend AuthenticationDetail = tostring(parse_json(AuthenticationDetails)[0].authenticationStepResultDetail)
+    | extend AuthProcessDetails = replace_string(AuthenticationProcessingDetails, " " , "")
+    | extend AuthProcessDetails = replace_string(AuthProcessDetails, "\r\n" , "")
+    | parse AuthProcessDetails with * "IsClientCapable\",\"value\":\"" IsClientCapable "\"" *
+    | parse AuthProcessDetails with * "IsCAEToken\",\"value\":\"" IsCaeToken "\"" *
+    | parse AuthProcessDetails with * "OauthScopeInfo\",\"value\":\"" OauthScopeInfo "\"}" *
+    | extend OauthScope = replace_string(OauthScopeInfo, '\\', '')
+// Remove sessions where PRT or Authentication broker was involved
+| join kind = anti ( SigninLogs
+    // Lookback 14 days for PRT renewal
+    | where (AppDisplayName == "Windows Sign-In" and IncomingTokenType == "primaryRefreshToken") or
+            (AppDisplayName == "Microsoft Authentication Broker" and IncomingTokenType == "primaryRefreshToken")
+    | summarize by SessionId
+    ) on SessionId
+| project CreatedDateTime, UserPrincipalName, IncomingTokenType, IsFoci, AppDisplayName, ResourceDisplayName, IsCaeToken, OauthScopeInfo, CaDeviceCompliance, SessionId, ClientAppUsed, SignInSessionStatus, UserAgent, InitiatingProcessName, IsThroughGlobalSecureAccess,  RiskState, RiskLevelDuringSignIn

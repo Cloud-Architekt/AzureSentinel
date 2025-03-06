@@ -1,0 +1,41 @@
+// Session Verdicts with Unique Token Identifiers
+// Correlation of session-related XDR alert to other sign-in events and their issued token (identifiers)
+
+let SessionVerdicts = (AccountUpn:string, AlertId:string="") {
+  let AffectedSessionByRequests = SecurityAlert
+        | where TimeGenerated >ago(90d)
+        // Get alerts with entity Cloud-Logon-Requests only
+        | where Entities !contains 'cloud-logon-session'
+        | mv-expand parse_json(Entities)
+        | where Entities.Type startswith 'cloud-logon-request'
+        | mv-expand parse_json(tostring(Entities.ThreatAnalysisSummary))
+        | extend RequestId = tostring(Entities.RequestId)
+        | join kind=leftouter (
+            union SigninLogs, AADNonInteractiveUserSignInLogs
+            | where UserPrincipalName contains (AccountUpn)
+            | distinct SessionId, RequestId = OriginalRequestId
+        ) on RequestId
+    | summarize arg_max(TimeGenerated, *), Verdicts = make_set(Entities_ThreatAnalysisSummary.Verdict) by SessionId;
+  let AffectedSessionBySessionId = SecurityAlert
+    | where SystemAlertId contains (AlertId)
+    // Get entities with SessionId
+    | mv-expand parse_json(Entities)
+    | where Entities.Type == 'cloud-logon-session'
+    | mv-expand parse_json(tostring(Entities.ThreatAnalysisSummary))
+    | summarize arg_max(TimeGenerated, *), Verdicts = make_set(Entities_ThreatAnalysisSummary.Verdict) by SessionId = tostring(Entities.SessionId);
+    let AffectedSessions = union AffectedSessionByRequests, AffectedSessionBySessionId
+    | where isnotempty(SessionId)
+    // Lookup for sign-ins with SessionId to get UniqueTokenIdentifier
+    | join kind=inner (
+            union SigninLogs, AADNonInteractiveUserSignInLogs
+            | where UserPrincipalName contains (AccountUpn)
+            | project UserPrincipalName, SessionId, RequestId = OriginalRequestId, UniqueTokenIdentifier, CorrelationId
+        | summarize UniqueTokenIdentifier = make_set(UniqueTokenIdentifier) by UserPrincipalName, SessionId
+     ) on SessionId
+    | where UserPrincipalName contains (AccountUpn)
+    | project-rename AccountUpn = UserPrincipalName
+    | project-away SessionId1
+    | project-reorder TimeGenerated, SessionId, Verdicts, AlertName, AlertSeverity, StartTime, EndTime, UniqueTokenIdentifier;
+  AffectedSessions
+};
+SessionVerdicts(AccountUpn="")

@@ -1,1 +1,4 @@
-Coming soon...
+Sample queries from my demo about Token Hunting at Yellowhat
+
+> Hunt the Tokens - Uncovering Post-Authentication Attacks Across Your Environment
+> With the increasing number of attacks involving token theft and replay, incorporating post-authentication attacks into your Identity Threat Detection and Response (ITDR) is crucial. However, detecting and hunting of those attacks across various data sources and signals can be a significant challenge. In this session, we will explore how to correlate authentication and activity logs to track the usage of issued tokens effectively. Additionally, we will delve into the details of enriching the data to identify unusual or sensitive access and operations. Enhance your hunting skills to track user and workload activities and detect those sophisticated token-based threats.

@@ -1,0 +1,28 @@
+// Correlation of sign-in with details about Token Protection status and Global Secure Access
+// Hunting query to correlate UniqueTokenIdentifier for identify Network Access Traffic event (in Global Secure Access) of Token Endpoint request
+// and showing details of token binding
+
+union SigninLogs, AADNonInteractiveUserSignInLogs
+// Optional: Filter for specific time window, user and only successful sign-ins
+// | where UserPrincipalName == "<UserPrincipalName>"
+//         and CreatedDateTime between ( todatetime('<StartTime>') .. todatetime('<EndTime>') )
+//         and ResultType == "0"
+// Filter for sign-ins to home tenant only
+| where HomeTenantId == ResourceTenantId
+// Expand device details
+| extend DeviceDetail = iff(isempty( DeviceDetail_dynamic ), todynamic(DeviceDetail_string), DeviceDetail_dynamic)
+| extend DeviceId = tostring(tolower(DeviceDetail.deviceId))
+| extend DeviceName = tostring(tolower(DeviceDetail.displayName))
+// Expand Token Protection Status details
+| extend TokenProtectionStatus = iff(isempty( TokenProtectionStatusDetails_dynamic ), todynamic(TokenProtectionStatusDetails_string), TokenProtectionStatusDetails_dynamic)
+| extend SignInSessionStatus = tostring(TokenProtectionStatus.signInSessionStatus)
+// Correlate token acquisition with NetworkAccessTraffic logs from GSA
+| join kind = leftouter ( NetworkAccessTraffic
+    | project TimeGenerated, TransactionId, ConnectionId, IPAddress = SourceIp, AgentVersion, UserId, DeviceId, UniqueTokenIdentifier = UniqueTokenId, InitiatingProcessName
+) on UserId, DeviceId, UniqueTokenIdentifier, IPAddress
+| extend IsThroughGlobalSecureAccess = iff(isnotempty(TransactionId), true, false)
+// Summarize results for simplified view
+| project CreatedDateTime, SessionId, IncomingTokenType, SignInSessionStatus, UniqueTokenIdentifier, AppDisplayName, ResourceDisplayName, ClientAppUsed, IsThroughGlobalSecureAccess, InitiatingProcessName, IPAddress, Location, AutonomousSystemNumber
+// Optional: Filtering for specific SessionId
+//| where SessionId == @"<SessionId>"
+| sort by CreatedDateTime asc

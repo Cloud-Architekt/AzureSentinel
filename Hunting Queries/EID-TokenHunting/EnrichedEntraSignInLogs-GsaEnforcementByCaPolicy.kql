@@ -1,0 +1,80 @@
+// Global Secure Access Enforcement by Conditional Access Policy
+// Hunting query which helps to identify and analyze sign-in requests outside of Global Secure Access
+// with details about exclusion on Compliant Network conditions in Conditional Access
+
+// Definition of Conditional Access Policy which blocks access outside of Compliant Network GSA
+let CaPolicyBlockedOutsideGsa = '<DisplayNameOfConditionalAccessPolicyForBlockedOutsideOfGSA>';
+// Definition of excluded Cloud Apps from compliant network CA, examples covers recommendation by Microsoft for exclusions
+let ExplicitlyGsaExcludedCloudAppIds = dynamic([
+    "372140e0-b3b7-4226-8ef9-d57986796201", // Azure Windows VM Sign-In
+    "0000000a-0000-0000-c000-000000000000", // Microsoft Intune
+    "d4ebce55-015a-49b5-a083-c84d1797ae8c"  // Microsoft Intune Enrollment
+]);
+union SigninLogs, AADNonInteractiveUserSignInLogs
+// Filter for sign-ins to home tenant only
+| where HomeTenantId == ResourceTenantId
+// Optional: Filter for specific time window and user
+// | where UserPrincipalName == "<UserPrincipalName>"
+//         and CreatedDateTime between ( todatetime('<StartTime>') .. todatetime('<EndTime>') )
+// Expand device details
+| extend DeviceDetail = iff(isempty( DeviceDetail_dynamic ), todynamic(DeviceDetail_string), DeviceDetail_dynamic)
+| extend DeviceId = tostring(tolower(DeviceDetail.deviceId))
+| extend DeviceName = tostring(tolower(DeviceDetail.displayName))
+// Expand Token Protection Status details
+| extend TokenProtectionStatus = iff(isempty( TokenProtectionStatusDetails_dynamic ), todynamic(TokenProtectionStatusDetails_string), TokenProtectionStatusDetails_dynamic)
+| extend SignInSessionStatus = tostring(TokenProtectionStatus.signInSessionStatus)
+// Correlate token acquisition with NetworkAccessTraffic logs from GSA
+| join kind = leftouter ( NetworkAccessTraffic
+    | project TimeGenerated, TransactionId, ConnectionId, IPAddress = SourceIp, AgentVersion, UserId, DeviceId, UniqueTokenIdentifier = UniqueTokenId, InitiatingProcessName
+) on UserId, DeviceId, UniqueTokenIdentifier, IPAddress
+// Workaround for missing valid property for IsThroughGlobalSecureAccess in sign-in logs
+| extend IsThroughGlobalSecureAccess = iff(isnotempty(TransactionId), true, false)
+// Summarize results for simplified view
+| extend ResultType = toint(ResultType)
+| project-reorder CreatedDateTime, SessionId, IncomingTokenType, TokenIssuerType, SignInSessionStatus, UniqueTokenIdentifier, AppDisplayName, ResourceDisplayName, IsThroughGlobalSecureAccess, InitiatingProcessName
+// Correlation with events from XDR AH AADSignInEventsBeta to get Conditional Access details
+| join kind=innerunique (
+    AADSignInEventsBeta
+) on $left.SessionId == $right.SessionId, $left.CorrelationId == $right.CorrelationId, $left.OriginalRequestId == $right.RequestId, $left.ResultType == $right.ErrorCode, $left.IPAddress == $right.IPAddress, $left.UserId == $right.AccountObjectId
+// Enrichment of GSA Insights 
+| mv-apply ConditionalAccessPolicyGsa = parse_json(ConditionalAccessPolicies) to typeof(dynamic) on (
+    where ConditionalAccessPolicyGsa.displayName startswith (CaPolicyBlockedOutsideGsa)
+)
+    | extend IsGsaEnforced =  iff(
+        (
+            parse_json(ConditionalAccessPolicyGsa)["result"] == 'notApplied' and
+            parse_json(ConditionalAccessPolicyGsa)["excludeRulesSatisfied"] has 'locationId' and
+            parse_json(ConditionalAccessPolicyGsa)["enforcedGrantControls"][0] == 'Block'
+        ), true, false)
+    | extend GsaEnforcedResourceScope =  case(
+        (
+            (AppId in~ (ExplicitlyGsaExcludedCloudAppIds) or ResourceIdentity in~ (ExplicitlyGsaExcludedCloudAppIds)) and
+            parse_json(ConditionalAccessPolicyGsa)["excludeRulesSatisfied"] has 'appId')
+        , "ExplicitlyExcluded",      
+            (parse_json(ConditionalAccessPolicyGsa)["includeRulesSatisfied"] has AppId)
+        , "ExplicitlyIncluded",                  
+            parse_json(ConditionalAccessPolicyGsa)["includeRulesSatisfied"] has 'allApps' and 
+            parse_json(ConditionalAccessPolicyGsa)["excludeRulesSatisfied"] !has 'appId'
+        , "AllAppsIncluded",            
+            (AppId !in~ (ExplicitlyGsaExcludedCloudAppIds) or ResourceIdentity !in~ (ExplicitlyGsaExcludedCloudAppIds)) and
+            parse_json(ConditionalAccessPolicyGsa)["excludeRulesSatisfied"] has 'appId'
+        , "MicrosoftExcluded", "Unknown"
+        )
+    | extend GsaEnforcedUserScope = case(
+        (
+            parse_json(ConditionalAccessPolicyGsa)["excludeRulesSatisfied"] has 'userId')
+        , "ExplicitlyExcluded",
+            (parse_json(ConditionalAccessPolicyGsa)["includeRulesSatisfied"] has 'userId')
+        , "ExplicitlyIncluded",                  
+            parse_json(ConditionalAccessPolicyGsa)["includeRulesSatisfied"] has 'allUsers' and 
+            parse_json(ConditionalAccessPolicyGsa)["excludeRulesSatisfied"] !has 'userId'
+        , "AllUsersIncluded",            
+            parse_json(ConditionalAccessPolicyGsa)["includeRulesSatisfied"] !has 'allUsers' and 
+            (parse_json(ConditionalAccessPolicyGsa)["includeRulesSatisfied"] !has 'userId') and
+            parse_json(ConditionalAccessPolicyGsa)["excludeRulesSatisfied"] !has 'userId'
+        , "UserNotIncluded", "Unknown"
+        )
+| project CreatedDateTime, UserPrincipalName, IncomingTokenType, SignInSessionStatus, AppDisplayName, ResourceDisplayName, InitiatingProcessName, IsThroughGlobalSecureAccess, ConnectionId, IsGsaEnforced, GsaEnforcedUserScope, GsaEnforcedResourceScope, ConditionalAccessPolicyGsa
+| sort by CreatedDateTime desc
+// Filter for sign-ins which are not going trough GSA and have not been enforced to use GSA
+| where IsThroughGlobalSecureAccess == false and IsGsaEnforced == false
