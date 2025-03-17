@@ -2,10 +2,10 @@ id: b7661446-5116-40ae-9f01-79074549ec18
 Function:
   Title: Parser to get privileged human identities from IdentityInfo table and privileged workloads from WorkloadIdentityInfo for unified list of all privileges
   Version: '1.0.0'
-  LastUpdated: '2023-11-11'
+  LastUpdated: '2025-03-17'
 Category: Microsoft Sentinel Parser
-FunctionName: PrivilegedIdentityInfo
-FunctionAlias: PrivilegedIdentityInfo
+FunctionName: PrivilegedUnifiedIdentityInfo
+FunctionAlias: PrivilegedUnifiedIdentityInfo
 FunctionQuery: |
     // Function to get privileged users from IdentityInfo and privileged workloads from WorkloadIdentityInfo
     let SensitiveEntraDirectoryRoles = externaldata(RoleName: string, RoleId: string, isPrivileged: bool, Classification: dynamic)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_EntraIdDirectoryRoles.json"] with(format='multijson')
