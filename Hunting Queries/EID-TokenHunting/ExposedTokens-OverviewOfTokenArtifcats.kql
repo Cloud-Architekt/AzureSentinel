@@ -10,20 +10,24 @@ let PrimaryRefresh = ExposureGraphEdges
     ) on $left.SourceNodeId == $right.NodeId
     | where parse_json(EdgeProperties)["rawData"]["primaryRefreshToken"]["primaryRefreshToken"] == 'true'
     | extend TokenType = tostring(parse_json(EdgeProperties)["rawData"]["primaryRefreshToken"]["type"])
-    | project EdgeId, SourceNodeId, SourceNodeName, SourceNodeLabel, EdgeLabel, TargetNodeId, TargetNodeName, TokenType, RawData, EntityIds;
-let SessionCookie = ExposureGraphNodes
-    // Accessing Azure Portal from this device as secondary user (seperated profile)
-    | where NodeLabel == "entra-userCookie"
-    | extend AccountObjectId = tostring(parse_json(NodeProperties)["rawData"]["entraCookiesSecretData"]["entraObjectId"])
-    | join kind=inner ( ExposureGraphNodes
-        | extend AccountObjectId = tostring(parse_json(NodeProperties)["rawData"]["accountObjectId"])
-        | project UserNodeId = NodeId, UserNodeName = NodeName, AccountObjectId
-    ) on AccountObjectId
-    | join kind=inner ( 
+    | project EdgeId, SourceNodeId, SourceNodeName, SourceNodeLabel, EdgeLabel, TargetNodeId, TargetNodeName, TokenType, DeviceRawData = RawData, EntityIds;
+let SessionCookie = ExposureGraphEdges
+    | where EdgeLabel == @"contains" and TargetNodeLabel == "entra-userCookie"
+    | join kind = inner (
+        ExposureGraphNodes
+        | project NodeId, RawData = parse_json(NodeProperties)["rawData"], EntityIds
+    ) on $left.SourceNodeId == $right.NodeId
+    | join kind = inner (
+        ExposureGraphNodes
+        | project NodeId, RawData = parse_json(NodeProperties)["rawData"], EntityIds
+    ) on $left.TargetNodeId == $right.NodeId
+    | join kind = inner (
         ExposureGraphEdges
-        ) on $left.NodeId == $right.TargetNodeId
-    | extend TokenType = tostring(parse_json(NodeProperties)["rawData"]["entraCookiesSecretData"]["type"])
-    | project EdgeId, SourceNodeId, SourceNodeName, SourceNodeLabel, EdgeLabel, TargetNodeId = UserNodeId, TargetNodeName = UserNodeName, TokenType, TokenNodeId = TargetNodeId, TokenNodeName = TargetNodeName, RawData = parse_json(NodeProperties)["rawData"], EntityIds;
+        | where EdgeLabel == @"can authenticate as" and SourceNodeLabel == @"entra-userCookie"
+    ) on $left.TargetNodeId == $right.SourceNodeId
+    | extend TargetNodeId
+    | extend TokenType = "UserCookie"
+    | project EdgeId, SourceNodeId, SourceNodeName, SourceNodeLabel, EdgeLabel, TargetNodeId = TargetNodeId1, TargetNodeName = TargetNodeName1, TokenType, DeviceRawData = RawData, EntityIds;
 let AzureCliToken = ExposureGraphNodes
     // RT and AT in Azure CLI e.g., privileged account not primary user but will be used on this device
     | where NodeLabel == "user-azure-cli-secret"
@@ -36,27 +40,27 @@ let AzureCliToken = ExposureGraphNodes
         ExposureGraphEdges
         ) on $left.NodeId == $right.TargetNodeId
     | extend TokenType = tostring(parse_json(NodeProperties)["rawData"]["userAzureCliSecretData"]["type"])
-    | project EdgeId, SourceNodeId, SourceNodeName, SourceNodeLabel, EdgeLabel, TargetNodeId = UserNodeId, TargetNodeName = UserNodeName, TokenType, TokenNodeId = TargetNodeId, TokenNodeName = TargetNodeName, RawData = parse_json(NodeProperties)["rawData"];
+    | project EdgeId, SourceNodeId, SourceNodeName, SourceNodeLabel, EdgeLabel, TargetNodeId = UserNodeId, TargetNodeName = UserNodeName, TokenType, TokenNodeId = TargetNodeId, TokenNodeName = TargetNodeName, DeviceRawData = parse_json(NodeProperties)["rawData"];
 union PrimaryRefresh, SessionCookie, AzureCliToken
 // Enrichment to MDE insights
 | mv-apply EntityIds = parse_json(EntityIds) on (
     where EntityIds.type =~ "DeviceInventoryId"
     | extend DeviceId = tostring(EntityIds.id)
 )
-| extend HighRiskVulnerability = iff(parse_json(RawData)["highRiskVulnerabilityInsights"]["hasHighOrCritical"] == 'true', true, false)
-| extend CredentialGuard = iff(parse_json(RawData)["hasGuardMisconfigurations"] has 'Credential Guard', false, true)
+| extend HighRiskVulnerability = iff(parse_json(DeviceRawData)["highRiskVulnerabilityInsights"]["hasHighOrCritical"] == 'true', true, false)
+| extend CredentialGuard = iff(parse_json(DeviceRawData)["hasGuardMisconfigurations"] has 'Credential Guard', false, true)
 | summarize TokenArtifacts = make_list(TokenType) by
         User = TargetNodeName,
         Device = SourceNodeName,
         DeviceId,
-        PublicIP = tostring(parse_json(RawData)["publicIP"]),
-        ExposureScore = tostring(parse_json(RawData)["exposureScore"]),
-        RiskScore = tostring(parse_json(RawData)["riskScore"]),
+        PublicIP = tostring(parse_json(DeviceRawData)["publicIP"]),
+        ExposureScore = tostring(parse_json(DeviceRawData)["exposureScore"]),
+        RiskScore = tostring(parse_json(DeviceRawData)["riskScore"]),
         HighRiskOrCriticalVulnerability = tostring(HighRiskVulnerability),
-        MaxCvssScore = tostring(parse_json(RawData)["highRiskVulnerabilityInsights"]["maxCvssScore"]),
-        AllowedRDP = tostring(parse_json(RawData)["rdpStatus"]["allowConnections"]),
+        MaxCvssScore = tostring(parse_json(DeviceRawData)["highRiskVulnerabilityInsights"]["maxCvssScore"]),
+        AllowedRDP = tostring(parse_json(DeviceRawData)["rdpStatus"]["allowConnections"]),
         CredentialGuard = tostring(CredentialGuard),
-        TpmActivated = tostring(parse_json(RawData)["tpmData"]["activated"])
+        TpmActivated = tostring(parse_json(DeviceRawData)["tpmData"]["activated"])
 | join kind = leftouter ( AlertEvidence
     | where isnotempty(DeviceId)
     | summarize Alerts = make_set(Title), AlertCategories = make_set(Categories) by DeviceId
