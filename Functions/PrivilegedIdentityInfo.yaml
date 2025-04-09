@@ -1,6 +1,6 @@
 id: fc353efc-4846-49ae-8328-39fabbbed5a6
 Function:
-  Title: Parser to get summarized overview of privileged identities from IdentityInfo table with all directory role assignments, enriched with details from my #EntraOps classification and role definitions.
+  Title: Parser to get summarized overview of privileged identities from IdentityInfo table with all directory role assignments, enriched with details from my EntraOps classification and role definitions.
   Version: '1.0.0'
   LastUpdated: '2025-03-17'
 Category: Microsoft Defender XDR Function
