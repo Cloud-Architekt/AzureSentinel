@@ -1,0 +1,21 @@
+let MfaCaPolicyName = "103 - ALL - User Access - All apps: Require MFA";
+let MfaCaPolicyObject = AADSCA_CAP_CL
+    | where displayName_s == MfaCaPolicyName
+    | summarize arg_max(TimeGenerated, *) by id_g;
+let ExcludedUsers = MfaCaPolicyObject
+    | mv-expand parse_json(conditions_users_excludeUsers_s)
+    | summarize by tostring(conditions_users_excludeUsers_s);
+let NotAppliedSignIns = AADSignInEventsBeta
+    | mv-apply MfaPolicy = parse_json(ConditionalAccessPolicies) to typeof(dynamic) on (
+        where MfaPolicy.displayName == (MfaCaPolicyName)
+    )
+    | extend MfaPolicyStatus = tostring(parse_json(MfaPolicy)["result"])
+    | where MfaPolicyStatus == "notApplied"
+    | mv-expand parse_json(MfaPolicy)["excludeRulesSatisfied"]
+    | extend MfaPolicyExclude = parse_json(MfaPolicy_excludeRulesSatisfied)["ruleSatisfied"]
+    | project-reorder MfaPolicyStatus, MfaPolicyExclude, DeviceName, OSPlatform, Application, ResourceDisplayName;
+NotAppliedSignIns
+    | extend Bypass = iff((AccountObjectId in (ExcludedUsers)), "excludedByUserId", tostring(MfaPolicyExclude))
+    // Comment Line 20 or 21
+    //| where parse_json(MfaPolicy_excludeRulesSatisfied)["ruleSatisfied"] == 'appId'
+    | summarize count() by tostring(Bypass)

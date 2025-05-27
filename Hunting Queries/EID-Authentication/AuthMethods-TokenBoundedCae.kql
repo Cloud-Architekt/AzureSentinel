@@ -1,0 +1,25 @@
+union SigninLogs, AADNonInteractiveUserSignInLogs
+    | where TimeGenerated >ago(90d)
+    | where isnotempty(SessionId)
+    | where ResultType == "0" and HomeTenantId == ResourceTenantId
+    | extend TokenProtectionStatusDetails = iff(isempty( TokenProtectionStatusDetails_dynamic ), todynamic(TokenProtectionStatusDetails_string), TokenProtectionStatusDetails_dynamic)
+    | extend SignInSessionStatus = tostring(parse_json(TokenProtectionStatusDetails)["signInSessionStatus"])
+    | extend AuthProcessDetails = replace_string(AuthenticationProcessingDetails, " " , "")
+    | extend AuthProcessDetails = replace_string(AuthProcessDetails, "\r\n" , "")
+    | parse AuthProcessDetails with * "IsCAEToken\",\"value\":\"" IsCaeToken "\"" *
+    | mv-expand parse_json(AuthenticationDetails)
+    | project AuthMethod = tostring(parse_json(AuthenticationDetails).authenticationMethod), SessionId, UniqueTokenIdentifier, UserPrincipalName, AppDisplayName, SignInSessionStatus, IsCaeToken
+    | join kind=leftouter (
+        union SigninLogs, AADNonInteractiveUserSignInLogs
+            | where TimeGenerated >ago(91d)
+            | summarize arg_min(CreatedDateTime, *) by SessionId
+            | mv-expand parse_json(AuthenticationDetails)
+            | extend AuthMethodStepDetail = tostring(parse_json(AuthenticationDetails).authenticationStepResultDetail)
+            | extend AuthMethod = iff(isnotempty(tostring(parse_json(AuthenticationDetails).authenticationMethod)), tostring(parse_json(AuthenticationDetails).authenticationMethod), "Unknown")
+            | project SessionId, AuthMethod, AuthMethodStepDetail, parse_json(AuthenticationDetails), InitialSignIn = CreatedDateTime, InitialRequestId = OriginalRequestId
+        ) on SessionId
+    | project-rename InitialAuthMethod = AuthMethod1
+    | extend TokenDetails = bag_pack_columns(UniqueTokenIdentifier, IsCaeToken, SignInSessionStatus)
+    | summarize NumberOfTokens=dcount(UniqueTokenIdentifier), TokenDetails = make_list(TokenDetails), NumberOfBoundedTokens=countif(SignInSessionStatus == 'bound'), NumberOfCaeTokens=countif(IsCaeToken == 'True') by SessionId, InitialAuthMethod, AuthMethodStepDetail, tostring(parse_json(AuthenticationDetails)), InitialSignIn, InitialRequestId, UserPrincipalName
+    | project InitialSignIn, InitialAuthMethod, UserPrincipalName, SessionId, NumberOfTokens, NumberOfBoundedTokens, NumberOfCaeTokens, TokenDetails
+    | sort by InitialSignIn
