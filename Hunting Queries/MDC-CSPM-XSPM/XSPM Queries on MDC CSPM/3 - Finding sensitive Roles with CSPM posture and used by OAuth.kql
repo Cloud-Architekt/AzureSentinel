@@ -1,0 +1,4 @@
+WorkloadIdentityInfoXdr
+| mv-expand parse_json(AssignedAzureRoles)
+| where parse_json(AssignedAzureRoles)["RoleIsPrivileged"] == 'true'
+| where parse_json(AssignedAzureRoles)["IsOverProvisioned"] == 'true' or parse_json(AssignedAzureRoles)["IsIdentityInactive"] == 'true' 

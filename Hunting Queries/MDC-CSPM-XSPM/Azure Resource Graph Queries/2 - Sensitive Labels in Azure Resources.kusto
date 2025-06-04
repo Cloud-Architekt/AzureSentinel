@@ -1,0 +1,2 @@
+securityresources
+| where type == "microsoft.security/insights"

@@ -1,0 +1,41 @@
+let EntryPointAttackPaths = SecurityAlert
+    | where TimeGenerated >ago(30d)
+    | where ProductName == "Azure Security Center"
+    | extend EntitiesDynamicArray = parse_json(Entities)
+    | mv-expand EntitiesDynamicArray
+    | extend Entitytype = tostring(parse_json(EntitiesDynamicArray).Type), EntityName = tostring(parse_json(EntitiesDynamicArray).Name)
+    | where Entitytype == "azure-resource"
+    | extend ResourceId = tostring(tolower(EntitiesDynamicArray.ResourceId))
+    | where ResourceId contains "providers"
+    | distinct AlertName, SystemAlertId, ResourceId, AlertLink
+    | join hint.remote=left (
+     arg("").securityresources
+        | where tenantId == (CustomerTenantId)
+        | where type == "microsoft.security/attackpaths"
+        | extend AttackPathDisplayName = tostring(properties["displayName"])
+        | extend AttackPathType = tostring(properties["attackPathType"])
+        | extend AttackPathId = tostring(properties["attackPathId"])
+        | extend EntryIdentifiers = parse_json(tostring(properties.entryPoint))
+        | extend EntryEntityResourceId = tostring(parse_json(EntryIdentifiers).entityIdentifiers.azureResourceId)
+        | extend TargetEntity = parse_json(tostring(properties.target))
+        | extend TargetEntityResourceId = tostring(parse_json(TargetEntity).entityIdentifiers.azureResourceId)
+        | extend AttackPathDisplayNameUrl = url_encode_component(AttackPathDisplayName)
+        | summarize Entities = make_set(properties.graphComponent.entities), EntryIdentifiers = make_set(EntryIdentifiers), EntryEntityResourceId = make_list_if(EntryEntityResourceId, isnotempty(EntryEntityResourceId)), TargetEntity = make_set(TargetEntity), TargetEntityResourceId = make_list_if(TargetEntityResourceId, isnotempty(TargetEntityResourceId)) by AttackPathDisplayName, AttackPathDisplayNameUrl, AttackPathId, AttackPathType, Type = "EntryPoint"
+        | extend ResourceId = tostring(EntryEntityResourceId[0])
+    ) on ResourceId;
+EntryPointAttackPaths
+| mvexpand (Entities)
+| extend Entity = parse_json(Entities)
+| extend EntityName = iff(isnotempty(tostring(Entities.entityName)), tostring(Entities.entityName),  strcat("N/A - Int ID:", tostring(Entity.entityInternalId)))
+| extend EntityType = tostring(Entities.entityType)
+| extend Entity = bag_pack_columns(EntityName, EntityType)
+| extend PortalUrl = strcat("https://portal.azure.com/", CustomerTenantId,
+                      "/#view/Microsoft_Azure_Security/AttackPathType.ReactView/attackPathType/",
+                      AttackPathType,
+                      "/attackPathTypeName/",
+                      AttackPathDisplayNameUrl,
+                      "/attackPathId/",
+                      AttackPathId)
+| extend Alert = bag_pack_columns(AlertName, SystemAlertId, AlertLink)                      
+| summarize Entities = make_set(Entity), Alerts = make_set(Alert)
+            by AttackPathId, AttackPathDisplayName, PortalUrl, EntryResourceId = tostring(EntryEntityResourceId[0]), TargetResourceId = tostring(TargetEntityResourceId[0])

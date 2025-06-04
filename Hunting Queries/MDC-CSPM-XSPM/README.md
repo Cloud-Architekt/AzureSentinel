@@ -1,0 +1,1 @@
+Sample queries from live demos in the session "[Exploring and Preventing Attack Paths with Defender for Cloud CSPM](https://github.com/Cloud-Architekt/meetups/blob/master/2025-06-03%20-%20Experts%20Live%20NL%20-%20Exploring%20and%20Preventing%20Attack%20Paths%20with%20CSPM.pdf)"

@@ -1,0 +1,19 @@
+securityresources
+| where type == "microsoft.security/attackpaths"
+| extend attackPathSteps = tolower(properties.attackPathSteps)
+| where attackPathSteps has "has permissions to"
+| extend graphComponent = properties.graphComponent
+| mv-expand connection = graphComponent.connections
+| extend connectionTitle = tostring(connection["title"])
+| where connectionTitle == "has permissions to" // consider using set of definition keys
+| extend sourceEntityInternalId = tostring(connection["sourceEntityInternalId"])
+| mv-expand entity = graphComponent.entities
+| extend entityInternalId = tostring(entity["entityInternalId"])
+| where sourceEntityInternalId == entityInternalId
+| extend entityType = tostring(entity.entityType)
+| extend attackpath= tostring(properties.displayName), attackPathType = properties.attackPathType, attackPathId = properties.attackPathId
+| extend refreshInterval = tostring(properties.refreshInterval)
+| extend riskLevel = tostring(properties.riskLevel)
+| extend riskFactors =  parse_json(properties.riskFactors)
+| order by riskLevel asc
+| project attackpath, subscriptionId, riskLevel, riskFactors, attackPathType, attackPathId, refreshInterval

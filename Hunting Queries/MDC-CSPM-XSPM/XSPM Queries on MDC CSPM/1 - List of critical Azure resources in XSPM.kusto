@@ -1,0 +1,19 @@
+    let XspmCriticalAssets = ExposureGraphNodes
+    | mv-expand EntityIds
+    | extend EntityType = parse_json(EntityIds)
+    | where EntityType["type"] == "AzureResourceId"
+    | mv-expand CriticalityData = parse_json(NodeProperties)["rawData"]["criticalityLevel"]["ruleNames"]
+    | extend CriticalityLevel = tostring(parse_json(NodeProperties)["rawData"]["criticalityLevel"]["criticalityLevel"])
+    | extend RuleName = tostring(CriticalityData)
+    | extend ResourceId = tolower(tostring(EntityType["id"]))
+    | where isnotempty(CriticalityLevel)
+    | project ResourceId, NodeId, NodeName, RuleName, CriticalityLevel;
+    XspmCriticalAssets
+    // Correlation with XDR Alerts
+    | join kind=inner (
+        AlertEvidence
+        | where EntityType == @"CloudResource"
+        | extend ResourceId = tolower(ResourceID)
+        | project AlertTitle = Title, ServiceSource, ResourceId
+    ) on ResourceId
+    | summarize SecurityAlerts = make_set(AlertTitle), CriticalAssetTag = make_set(RuleName) by ResourceId

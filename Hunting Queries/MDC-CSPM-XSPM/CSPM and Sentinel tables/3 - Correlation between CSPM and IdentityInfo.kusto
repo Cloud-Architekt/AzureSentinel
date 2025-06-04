@@ -1,0 +1,32 @@
+let UnusuedHumanIdentities = arg("").securityresources | where type =~ "microsoft.security/assessments"
+        | extend assessmentKey=extract(@"(?i)providers/Microsoft.Security/assessments/([^/]*)", 1, id)
+        | extend resourceId = tostring(properties.resourceDetails.Id)
+        | extend identityId = tostring(properties.additionalData.ResourceName)
+        | extend identityType = tostring(properties.additionalData.ResourceType)
+        | extend assessmentTitle = tostring(properties.displayName)        
+        | extend assessmentSev = tostring(properties.metadata.severity)
+        | extend portalUrl = tostring(properties.links.azurePortal)
+        | where assessmentKey == "8b0bd683-bcfe-4ab1-96b9-f15a60eaa89d"
+        | extend graphNodesEdges = parse_json(properties.risk.paths)
+        | extend status=tostring(properties.status.code), resourceType = tostring(properties.additionalData.ResourceType)
+        | where status == "Unhealthy"
+        | project assessmentKey, assessmentTitle, assessmentSev, resourceId, subscriptionId, identityId, identityType, status, tenantId, portalUrl, graphNodesEdges;
+UnusuedHumanIdentities
+| join kind = inner ( IdentityInfo
+      | where TimeGenerated > ago(14d)
+      | summarize arg_max(TimeGenerated, *) by AccountObjectId
+      | extend identityId = AccountObjectId
+      | project identityId, AccountDisplayName, AccountObjectId, Tags, IsAccountEnabled, RiskLevel
+) on identityId
+// Correlation to direct role-assignments only (no nesting or group-based assignments)
+| join hint.remote=left (arg("").authorizationresources
+    | where type =~ 'microsoft.authorization/roleassignments'
+    | extend roleDefinitionId = properties.roleDefinitionId
+    | extend principalType = properties.principalType
+    | extend identityId = tostring(properties.principalId)
+    | extend roleAssignmentScope = properties.scope
+    | project identityId, roleDefinitionId, roleAssignmentScope, subscriptionId
+) on identityId, subscriptionId
+| extend roleAssignment = bag_pack_columns(roleDefinitionId, roleAssignmentScope, graphNodesEdges)
+| extend CiemDetail = bag_pack_columns(assessmentTitle, portalUrl, graphNodesEdges, roleAssignment)
+| summarize CiemDetails = make_set(CiemDetail) by AccountDisplayName, AccountObjectId, Tags, IsAccountEnabled, RiskLevel, Status = status

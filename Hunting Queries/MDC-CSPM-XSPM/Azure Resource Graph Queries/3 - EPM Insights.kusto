@@ -1,0 +1,25 @@
+securityresources
+| where type == "microsoft.security/assessments"
+| extend source = trim(' ', tolower(tostring(properties.resourceDetails.Source)))
+                                        | extend resourceId = trim(' ', tolower(tostring(case(
+                                                                                source =~ "azure", properties.resourceDetails.Id,
+                                                                                source =~ "aws" and isnotempty(tostring(properties.resourceDetails.ConnectorId)), properties.resourceDetails.Id,
+                                                                                source =~ "gcp" and isnotempty(tostring(properties.resourceDetails.ConnectorId)), properties.resourceDetails.Id,
+                                                                                source =~ 'aws', properties.resourceDetails.AzureResourceId,
+                                                                                source =~ 'gcp', properties.resourceDetails.AzureResourceId,
+                                                                                extract('^(.+)/providers/Microsoft.Security/assessments/.+$',1,id)
+                                                                                ))))
+| extend status = trim(" ", tostring(properties.status.code))
+| extend cause = trim(" ", tostring(properties.status.cause))
+| extend resourcetype = trim(" ", tostring(properties.additionalData.ResourceType))
+| extend assessmentKey = tostring(name)
+| where assessmentKey == "d19d5a12-41e9-44e2-b7f5-ee2160f62d62" or assessmentKey == "8b0bd683-bcfe-4ab1-96b9-f15a60eaa89d"
+| extend resourceId = tostring(properties.resourceDetails.Id)
+| extend identityId = tostring(properties.additionalData.ResourceName)
+| extend identityType = tostring(properties.additionalData.ResourceType)
+| extend assessmentTitle = tostring(properties.displayName)        
+| extend assessmentSev = tostring(properties.metadata.severity)
+| extend portalUrl = tostring(properties.links.azurePortal)
+| extend status=tostring(properties.status.code), resourceType = tostring(properties.additionalData.ResourceType)
+| project assessmentKey, assessmentTitle, assessmentSev, resourceId, identityId, identityType, status, tenantId, portalUrl
+| sort by identityId

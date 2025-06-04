@@ -1,0 +1,12 @@
+ExposureGraphEdges
+| make-graph SourceNodeId --> TargetNodeId with ExposureGraphNodes on NodeId
+| graph-match cycles=none (Recommendation)-[affecting]->(azuredevopsrepository)-[actions*1..3]->(Resource)
+    where Recommendation.NodeLabel == "mdcManagementRecommendation"
+    and affecting.EdgeLabel == "affecting"
+    and all(actions, EdgeLabel == "provisions")
+    and Resource.NodeLabel == "microsoft.storage/storageaccounts"
+    project 
+        RecommendationName = Recommendation.NodeName, 
+        Severity = tostring(Recommendation.NodeProperties.rawData.severity),
+        RepoName = azuredevopsrepository.NodeName,
+        Resource = Resource.NodeName
