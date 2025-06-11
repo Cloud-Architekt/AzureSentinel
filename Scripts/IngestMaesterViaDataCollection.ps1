@@ -1,51 +1,51 @@
 <#
-    .SYNOPSIS
-    Ingests Maester test results from a specified folder into a Log Analytics Custom Log Table using Azure Data Collection Rules.
+.SYNOPSIS
+Ingests Maester test results from a specified folder into a Log Analytics Custom Log Table using Azure Data Collection Rules.
 
-    .DESCRIPTION
-    This script reads test results from JSON files in a specified folder, processes the data, and ingests it into a Log Analytics Custom Log Table.
-    It uses Azure Data Collection Rules to direct the data to the appropriate Log Analytics workspace.
-    The script requires the AzAPICall module to be installed and configured with appropriate permissions to access Azure resources.
-    It's designed to be used in a CI/CD pipeline, such as GitHub Actions, to automate the ingestion of test results.
+.DESCRIPTION
+This script reads test results from JSON files in a specified folder, processes the data, and ingests it into a Log Analytics Custom Log Table.
+It uses Azure Data Collection Rules to direct the data to the appropriate Log Analytics workspace.
+The script requires the AzAPICall module to be installed and configured with appropriate permissions to access Azure resources.
+It's designed to be used in a CI/CD pipeline, such as GitHub Actions, to automate the ingestion of test results.
 
-    .PARAMETER ImportFolder
-    The folder containing the test results in JSON format. Default is "tests.results".
+.PARAMETER ImportFolder
+The folder containing the test results in JSON format. Default is "tests.results".
 
-    .PARAMETER TempFolder
-    The temporary folder where intermediate files will be stored. Default is "temp".
+.PARAMETER TempFolder
+The temporary folder where intermediate files will be stored. Default is "temp".
 
-    .PARAMETER DataCollectionRuleSubscriptionId
-    The subscription ID where the Data Collection Rule is located. This is required for the script to function.
+.PARAMETER DataCollectionRuleSubscriptionId
+The subscription ID where the Data Collection Rule is located. This is required for the script to function.
 
-    .PARAMETER DataCollectionRuleResourceGroup
-    The resource group containing the Data Collection Rule. Default is "maester-rg".
+.PARAMETER DataCollectionRuleResourceGroup
+The resource group containing the Data Collection Rule. Default is "maester-rg".
 
-    .PARAMETER DataCollectionRuleName
-    The name of the Data Collection Rule to use for ingestion. Default is "maester-dcr".
+.PARAMETER DataCollectionRuleName
+The name of the Data Collection Rule to use for ingestion. Default is "maester-dcr".
 
-    .PARAMETER LogAnalyticsCustomLogTableName
-    The name of the Log Analytics Custom Log Table where the data will be ingested. Default is "Maester_CL".
+.PARAMETER LogAnalyticsCustomLogTableName
+The name of the Log Analytics Custom Log Table where the data will be ingested. Default is "Maester_CL".
 
-    .PARAMETER ThrottleLimitMonitor
-    The maximum number of parallel requests to the Azure Monitor ingestion endpoint. Default is 5.
+.PARAMETER ThrottleLimitMonitor
+The maximum number of parallel requests to the Azure Monitor ingestion endpoint. Default is 5.
 
-    .EXAMPLE
-    Run interactively in PowerShell to ingest test results:
-    .\ingest.ps1 -ImportFolder "path\to\results" -DataCollectionRuleSubscriptionId "your-subscription-id"
+.EXAMPLE
+Run interactively in PowerShell to ingest test results:
+.\ingest.ps1 -ImportFolder "path\to\results" -DataCollectionRuleSubscriptionId "your-subscription-id"
 
-    .EXAMPLE
-    Copy this line into the next step in a GitHub Actions workflow after Maester collects data to automate the ingestion of test results:
-    - name: Ingest Maester results
-      uses: azure/powershell@v2
-      with:
-        inlineScript: |
-          .\ingest.ps1 `
-            -ImportFolder "test-results" `
-            -DataCollectionRuleSubscriptionId "${{ secrets.AZURE_SUBSCRIPTION_ID }}" `
-            -DataCollectionRuleResourceGroup "maester-rg" `
-            -DataCollectionRuleName "maester-dcr" `
-            -LogAnalyticsCustomLogTableName "Maester_CL"
-        azPSVersion: "latest"
+.EXAMPLE
+Copy this line into the next step in a GitHub Actions workflow after Maester collects data to automate the ingestion of test results:
+- name: Ingest Maester results
+  uses: azure/powershell@v2
+  with:
+    inlineScript: |
+      .\ingest.ps1 `
+        -ImportFolder "test-results" `
+        -DataCollectionRuleSubscriptionId "${{ secrets.AZURE_SUBSCRIPTION_ID }}" `
+        -DataCollectionRuleResourceGroup "maester-rg" `
+        -DataCollectionRuleName "maester-dcr" `
+        -LogAnalyticsCustomLogTableName "Maester_CL"
+    azPSVersion: "latest"
 
 #>
 
