@@ -1,0 +1,34 @@
+union SigninLogs, AADNonInteractiveUserSignInLogs
+    | where TimeGenerated >ago(90d)
+    | where isnotempty(SessionId)
+    | where ResultType == "0" and HomeTenantId == ResourceTenantId
+    | extend MfaDetail = coalesce(todynamic(MfaDetail_string), MfaDetail_dynamic)
+    | extend DeviceDetail = coalesce(todynamic(DeviceDetail_string), DeviceDetail_dynamic)
+    | extend TokenProtectionStatusDetails = coalesce(todynamic(TokenProtectionStatusDetails_string), TokenProtectionStatusDetails_dynamic)
+    | extend SignInSessionStatus = tostring(parse_json(TokenProtectionStatusDetails)["signInSessionStatus"])
+    | extend AuthProcessDetails = replace_string(AuthenticationProcessingDetails, " " , "")
+    | extend AuthProcessDetails = replace_string(AuthProcessDetails, "\r\n" , "")
+    | parse AuthProcessDetails with * "IsCAEToken\",\"value\":\"" IsCaeToken "\"" *
+    | mv-expand parse_json(AuthenticationDetails)
+    | project AuthMethod = tostring(parse_json(AuthenticationDetails).authenticationMethod), SessionId, UniqueTokenIdentifier, UserPrincipalName, AppDisplayName, SignInSessionStatus, IsCaeToken, CreatedDateTime, DeviceDetail
+    | join kind=leftouter (
+        union SigninLogs, AADNonInteractiveUserSignInLogs
+            | where TimeGenerated >ago(91d)
+            | summarize arg_min(CreatedDateTime, *) by SessionId
+            | mv-expand parse_json(AuthenticationDetails)
+            | extend AuthMethodStepDetail = tostring(parse_json(AuthenticationDetails).authenticationStepResultDetail)
+            | extend AuthMethod = iff(isnotempty(tostring(parse_json(AuthenticationDetails).authenticationMethod)), tostring(parse_json(AuthenticationDetails).authenticationMethod), "Unknown")
+            | project SessionId, AuthMethod, AuthMethodStepDetail, parse_json(AuthenticationDetails), InitialSignIn = CreatedDateTime, InitialRequestId = OriginalRequestId
+        ) on SessionId
+    | project-rename InitialAuthMethod = AuthMethod1
+    | where UserPrincipalName != @"adtoaadsyncserviceaccount@cloudlab.onmicrosoft.com"
+    | extend DeviceName = tostring(parse_json(DeviceDetail)["displayName"])
+    | extend DeviceTrustType = tostring(parse_json(DeviceDetail)["trustType"])
+    | extend DeviceCompliant = tostring(parse_json(DeviceDetail)["isCompliant"])
+    | extend DeviceDetails = bag_pack_columns(DeviceName, DeviceTrustType, DeviceCompliant)
+    | extend TokenDetails = bag_pack_columns(UniqueTokenIdentifier, IsCaeToken, SignInSessionStatus, DeviceCompliant)
+    | summarize SessionStartTime = min(CreatedDateTime), SessionEndTime = max(CreatedDateTime), NumberOfTokens=countif(isnotempty(UniqueTokenIdentifier)), NumberOfTokensWithComplianceState=countif(DeviceCompliant == 'true'), TokenDetails = make_list(TokenDetails), NumberOfBoundedTokens=countif(SignInSessionStatus == 'bound'), NumberOfCaeTokens=countif(IsCaeToken == 'True') by SessionId, InitialAuthMethod, AuthMethodStepDetail, tostring(parse_json(AuthenticationDetails)), InitialSignIn, InitialRequestId, UserPrincipalName, DeviceName
+    | project InitialSignIn, InitialAuthMethod, UserPrincipalName, DeviceName, SessionStartTime, SessionEndTime, SessionId, NumberOfTokens, NumberOfBoundedTokens, NumberOfCaeTokens, NumberOfTokensWithComplianceState, TokenDetails
+    // Summarize by users
+    //| extend Session = bag_pack_columns(SessionId, TokenDetails, NumberOfBoundedTokens, NumberOfCaeTokens, NumberOfTokens)
+    //| summarize InitialAuthMethod = make_set(InitialAuthMethod), Sessions = make_set(Session), NumberOfSessions = dcount(NumberOfTokens) by UserPrincipalName
