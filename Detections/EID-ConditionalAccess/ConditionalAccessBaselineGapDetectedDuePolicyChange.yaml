@@ -1,0 +1,140 @@
+id: 02e0bfee-2e8d-4081-a8e1-fcc468ad7a74
+name: Conditional Access Baseline Gap Detected Due to Policy Change
+version: 1.0.0
+kind: Scheduled
+description: A Conditional Access policy is modified and, using "What If"-feature in Maester checks, identifies if the change creates a critical gap in the Conditional Access baseline design. It correlates audit events with negative changed Maester results to alert on deviations from the recommended baseline.
+severity: Medium
+queryFrequency: 1d
+queryPeriod: 2d
+triggerOperator: gt
+triggerThreshold: 0
+tactics:
+- DefenseEvasion
+- InitialAccess
+query: |+
+  let ChangedPolicies = AuditLogs
+      | where TimeGenerated > ago(24h)
+      | where OperationName has "conditional access policy"
+      | where Result =~ "success"
+      | extend InitiatingAppName = tostring(InitiatedBy.app.displayName)
+      | extend InitiatingAppId = tostring(InitiatedBy.app.appId)
+      | extend InitiatingAppServicePrincipalId = tostring(InitiatedBy.app.servicePrincipalId)
+      | extend InitiatingUserPrincipalName = tostring(InitiatedBy.user.userPrincipalName)
+      | extend InitiatingAadUserId = tostring(InitiatedBy.user.id)
+      | extend InitiatingIPAddress = tostring(InitiatedBy.user.ipAddress)
+      | extend CaPolicyName = tostring(TargetResources[0].displayName)
+      | extend CaPolicyId = tostring(TargetResources[0].id)
+      | extend NewPolicyValues = TargetResources[0].modifiedProperties[0].newValue
+      | extend OldPolicyValues = TargetResources[0].modifiedProperties[0].oldValue
+      | extend
+          InitiatingAccountName = tostring(split(InitiatingUserPrincipalName, "@")[0]),
+          InitiatingAccountUPNSuffix = tostring(split(InitiatingUserPrincipalName, "@")[1])
+      | project-reorder
+          TimeGenerated,
+          OperationName,
+          CaPolicyId,
+          CaPolicyName,
+          InitiatingAppId,
+          InitiatingAppName,
+          InitiatingAppServicePrincipalId,
+          InitiatingUserPrincipalName,
+          InitiatingAadUserId,
+          InitiatingIPAddress,
+          NewPolicyValues,
+          OldPolicyValues;
+  let PreviousCheckResults = Maester_CL
+      | where Block == "Conditional Access Baseline Policies"
+      | summarize arg_min(TimeGenerated, *) by Id;
+  let NewestCheckResults = Maester_CL
+      | where Block == "Conditional Access Baseline Policies"
+      | summarize arg_max(TimeGenerated, *) by Id;
+  let FailedChecks = NewestCheckResults
+      | join kind=inner PreviousCheckResults on Id
+      | where Result != Result1
+      | extend PreviousResultDetail = tostring(parse_json(ResultDetail1))
+      | extend AffectedCaPolicyIds = extract_all(@'([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})', PreviousResultDetail)
+      | project
+          Id,
+          Title,
+          CurrentResult = Result,
+          CurrentResultTimestamp = TimeGenerated,
+          PreviousResult = Result1,
+          PreviousResultTimestamp = TimeGenerated1,
+          ResultDetail,
+          PreviousResultDetail,
+          AffectedCaPolicyIds;
+  ChangedPolicies
+  | join kind=inner (
+      FailedChecks
+      | mv-expand parse_json(AffectedCaPolicyIds)
+      | project-rename MaesterId = Id
+      | extend CaPolicyId = tostring(AffectedCaPolicyIds)
+      | project
+          MaesterId,
+          CaPolicyId,
+          TestTitle = parse_json(PreviousResultDetail).TestTitle,
+          CurrentResult,
+          TestFinding = ResultDetail.TestResult,
+          PreviousTestFinding = parse_json(PreviousResultDetail).TestResult
+      )
+      on CaPolicyId
+  | extend FailedChecks = bag_pack_columns(MaesterId, TestTitle, CurrentResult, TestFinding, PreviousTestFinding)
+  | project
+      TimeGenerated,
+      OperationName,
+      CaPolicyId,
+      CaPolicyName,
+      InitiatingUserPrincipalName,
+      InitiatingAadUserId,
+      InitiatingIPAddress,
+      Id,
+      LoggedByService,
+      ActivityDisplayName,
+      parse_json(FailedChecks),
+      PreviousCaPolicy = parse_json(OldPolicyValues),
+      CurrentCaPolicy = parse_json(NewPolicyValues),
+      TestTitle,
+      TestFinding
+
+suppressionEnabled: false
+incidentConfiguration:
+  createIncident: true
+  groupingConfiguration:
+    enabled: true
+    reopenClosedIncident: false
+    lookbackDuration: 5h
+    matchingMethod: Selected
+    groupByEntities:
+    - Account
+    groupByAlertDetails: []
+    groupByCustomDetails:
+    - CaPolicyId
+eventGroupingSettings:
+  aggregationKind: AlertPerResult
+alertDetailsOverride:
+  alertDescriptionFormat: |-
+    Conditional Access policy "{{CaPolicyName}}" has been modified, resulting in a potential policy baseline gap and failed Maester check:
+
+    {{{TestTitle}} 
+    {{TestFinding}}
+  alertDynamicProperties: []
+customDetails:
+  CaPolicyId: CaPolicyId
+  CaPolicyName: CaPolicyName
+  Activity: ActivityDisplayName
+  FailedChecks: FailedChecks
+  PreviousCaPolicy: PreviousCaPolicy
+  CurrentCaPolicy: CurrentCaPolicy
+  TestTitle: TestTitle
+  TestFinding: TestFinding
+entityMappings:
+- entityType: IP
+  fieldMappings:
+  - identifier: Address
+    columnName: InitiatingIPAddress
+- entityType: Account
+  fieldMappings:
+  - identifier: Name
+    columnName: InitiatingUserPrincipalName
+suppressionDuration: 5h
+
