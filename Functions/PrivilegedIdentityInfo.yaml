@@ -1,8 +1,8 @@
 id: fc353efc-4846-49ae-8328-39fabbbed5a6
 Function:
-  Title: Parser to get summarized overview of privileged identities from IdentityInfo table with all directory role assignments, enriched with details from my EntraOps classification and role definitions.
-  Version: '1.0.0'
-  LastUpdated: '2025-03-17'
+  Title: 'Parser to get summarized overview of privileged identities from IdentityInfo table with all directory role assignments, enriched with details from my EntraOps classification and role definitions.'
+  Version: '1.1.0'
+  LastUpdated: '2025-06-23'
 Category: Microsoft Defender XDR Function
 FunctionName: PrivilegedIdentityInfo
 FunctionAlias: PrivilegedIdentityInfo
@@ -10,9 +10,11 @@ FunctionQuery: |
     let PrivilegedIdentityInfo = (UserPrincipalName:string, ObjectId:string, EntraRoleDefinitionName:string="", EntraRolePermission:string="", LookbackTimestamp:datetime=datetime(now)) {
         let SensitiveEntraDirectoryRoles = externaldata(RoleName: string, RoleId: string, isPrivileged: bool, Categories:string, Classification: dynamic, RolePermissions: dynamic)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_EntraIdDirectoryRoles.json"] with(format='multijson')
         | project RoleDefinitionName = RoleName, RoleIsPrivileged = isPrivileged, Classification, RoleCategories = Categories, RolePermissions;
-        let AllPimRoles = IdentityInfo
+        let IdentityInfoUpdateInterval = -14;
+        let IdentityInfoLookbackWindow = datetime_add('day', IdentityInfoUpdateInterval, LookbackTimestamp);
+        let AllEntraPimRoles = IdentityInfo
             | where tolower(AccountUpn) contains tolower(UserPrincipalName) and AccountObjectId contains (ObjectId)
-            | where TimeGenerated > ago(14d) and TimeGenerated <(LookbackTimestamp)
+            | where TimeGenerated >(IdentityInfoLookbackWindow) and TimeGenerated <(LookbackTimestamp)
             | summarize arg_max(TimeGenerated, *) by AccountObjectId
             | mv-expand parse_json(PrivilegedEntraPimRoles)
             | extend RoleDefinitionName = tostring(bag_keys(PrivilegedEntraPimRoles)[0])
@@ -22,19 +24,19 @@ FunctionQuery: |
             | extend RoleAssignmentType = tostring(PrivilegedEntraPimRoles[RoleDefinitionName][2])
             | project AccountObjectId, AccountUpn, RoleDefinitionName, RoleAssignmentType, PimAssignmentType, PimAssignmentExpiration
             | sort by AccountUpn, RoleDefinitionName;    
-        let EligibleRoles = AllPimRoles
+        let EntraEligibleRoles = AllEntraPimRoles
             | where PimAssignmentType == "Eligible"
             | sort by AccountUpn, RoleDefinitionName;
-        let ActiveRoles = IdentityInfo
+        let EntraActiveRoles = IdentityInfo
             | where tolower(AccountUpn) contains tolower(UserPrincipalName) or AccountObjectId contains (ObjectId)
-            | where TimeGenerated > ago(14d) and TimeGenerated <(LookbackTimestamp)
+            | where TimeGenerated >(IdentityInfoLookbackWindow) and TimeGenerated <(LookbackTimestamp)
             | summarize arg_max(TimeGenerated, *) by AccountObjectId
             | where isnotempty(AssignedRoles)
             | mv-expand parse_json(AssignedRoles)
             | extend RoleDefinitionName = tostring(AssignedRoles)
             | where RoleDefinitionName contains (EntraRoleDefinitionName)
             | join kind = leftouter (
-                AllPimRoles
+                AllEntraPimRoles
                 | where PimAssignmentType == "Assigned"
             ) on AccountObjectId, RoleDefinitionName
             | extend PimAssignmentExpiration = coalesce(PimAssignmentExpiration, "Unknown")
@@ -42,25 +44,27 @@ FunctionQuery: |
             | extend RoleAssignmentType = coalesce(RoleAssignmentType, "Unknown")
             | project AccountObjectId, AccountUpn, RoleDefinitionName, RoleAssignmentType, PimAssignmentType, PimAssignmentExpiration
             | sort by AccountObjectId, RoleDefinitionName;
-        let AllRoles = union EligibleRoles, ActiveRoles
+        let AllEntraRoles = union EntraEligibleRoles, EntraActiveRoles
             | where tolower(AccountUpn) contains tolower(UserPrincipalName) and AccountObjectId contains (ObjectId)
             | join kind=inner ( SensitiveEntraDirectoryRoles
                 | where RolePermissions contains (EntraRolePermission)
             ) on RoleDefinitionName
             | extend AadDirectoryRoleTierLevels = parse_json(Classification.EAMTierLevelName)
-            | extend Classification = iif((AadDirectoryRoleTierLevels contains "ControlPlane"), "ControlPlane", "Unclassified")
-            | extend Classification = iif((Classification == "Unclassified" and (AadDirectoryRoleTierLevels contains "ManagementPlane")), "ManagementPlane", Classification)
-            | extend Classification = iif((Classification == "Unclassified" and (AadDirectoryRoleTierLevels contains "WorkloadPlane")), "WorkloadPlane", Classification)
-            | extend Classification = iif((Classification == "Unclassified" and (AadDirectoryRoleTierLevels contains "UserAccess")), "UserAccess", Classification)
-            | extend Classification = Classification
+            | extend Classification = case(
+                AadDirectoryRoleTierLevels contains "ControlPlane", "ControlPlane",
+                AadDirectoryRoleTierLevels contains "ManagementPlane", "ManagementPlane",
+                AadDirectoryRoleTierLevels contains "WorkloadPlane", "WorkloadPlane",
+                AadDirectoryRoleTierLevels contains "UserAccess", "UserAccess",
+                "Unclassified"
+            )
             | extend PimAssignmentType = iff(PimAssignmentType == "Assigned", "Active", PimAssignmentType)
             | project RoleAssignments = bag_pack_columns(RoleDefinitionName, RoleAssignmentType, PimAssignmentType, PimAssignmentExpiration, Classification, RoleIsPrivileged, RoleCategories, RolePermissions), AccountObjectId
-            | summarize RoleAssignments = make_set(RoleAssignments) by AccountObjectId;
+            | summarize AssignedEntraRoles = make_set(RoleAssignments) by AccountObjectId;
         IdentityInfo
         | where tolower(AccountUpn) contains tolower(UserPrincipalName) and AccountObjectId contains (ObjectId)    
-        | where TimeGenerated > ago(14d) and TimeGenerated <(LookbackTimestamp)
+        | where TimeGenerated >(IdentityInfoLookbackWindow) and TimeGenerated <(LookbackTimestamp)
         | summarize arg_max(TimeGenerated, *) by AccountObjectId
-        | join kind=inner ( AllRoles ) on AccountObjectId
+        | join kind=inner ( AllEntraRoles ) on AccountObjectId
         | project-away ReportId, AssignedRoles, PrivilegedEntraPimRoles, AccountObjectId1
         | sort by AccountName asc
     };
