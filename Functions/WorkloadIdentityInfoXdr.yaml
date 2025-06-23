@@ -1,8 +1,8 @@
 id: 0cd18905-c644-4ad1-b70d-95195620ed98
 Function:
-  Title: Function to get summarized overview of application and workload identities from IdentityInfo and OAuthAppInfo table with API Permissions, Azure RBAC- and Entra ID roles with enriched details from my EntraOps classification, critical asset management and CSPM.
-  Version: '1.0.0'
-  LastUpdated: '2025-04-09'
+  Title: 'Function to get summarized overview of application and workload identities from IdentityInfo and OAuthAppInfo table with API Permissions, Azure RBAC- and Entra ID roles with enriched details from my EntraOps classification, critical asset management and CSPM.'
+  Version: '1.1.0'
+  LastUpdated: '2025-06-23'
 Category: Microsoft Defender XDR Function
 FunctionName: WorkloadIdentityInfoXdr
 FunctionAlias: WorkloadIdentityInfoXdr
@@ -27,7 +27,7 @@ FunctionQuery: |
             | where tolower(AccountDisplayName) contains tolower(ServicePrincipalName) and AccountObjectId contains tostring(ServicePrincipalObjectId)
             | where Timestamp >ago(14d)
             | summarize arg_max(Timestamp, *) by AccountObjectId
-            | project ServicePrincipalName = AccountDisplayName, ServicePrincipalId = AccountObjectId
+            | project ServicePrincipalName = AccountDisplayName, ServicePrincipalId = AccountObjectId, CriticalityLevel
         // Lookup for OAuth application details
         | lookup (
             OAuthAppInfo
@@ -170,9 +170,10 @@ FunctionQuery: |
             | project-rename XspmGraphOAuthAppNodeId = TargetNodeId
             | summarize OwnedBy = make_set(OwnedBy) by XspmGraphOAuthAppNodeId
         ) on XspmGraphOAuthAppNodeId
+        | extend CriticalityLevel = toint(parse_json(XspmCriticalAssetDetails)["criticalityLevel"])
         | project-away XspmGraphNodeId, XspmGraphNodeId1, ServicePrincipalId1, ServicePrincipalId2, XspmGraphNodeId1, XspmGraphNodeId2, TargetNodeId, XspmGraphOAuthAppNodeId, XspmGraphOAuthAppNodeId1
         | sort by ServicePrincipalName asc
-        | project ServicePrincipalName, ServicePrincipalId, OAuthAppId, AddedOnTime, LastModifiedTime, AppStatus, VerifiedPublisher, IsAdminConsented, AppOrigin, AppOwnerTenantId, ApiPermissions, AssignedAzureRoles, AssignedEntraRoles, AuthenticatedBy, OwnedBy
+        | project Timestamp, TimeGenerated, ServicePrincipalName, ServicePrincipalId, OAuthAppId, CriticalityLevel, AddedOnTime, LastModifiedTime, AppStatus, VerifiedPublisher, IsAdminConsented, AppOrigin, AppOwnerTenantId, ApiPermissions, AssignedAzureRoles, AssignedEntraRoles, AuthenticatedBy, OwnedBy
         | sort by OAuthAppId
         };
     WorkloadIdentityInfoXdr(ServicePrincipalName,ServicePrincipalObjectId)
