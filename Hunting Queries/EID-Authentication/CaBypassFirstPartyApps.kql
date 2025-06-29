@@ -1,4 +1,4 @@
-// Looking for sign-ins of first-party apps that do not apply to a closed CA policies (e.g., to require MFA or device compliance),
+// Looking for sign-ins of first-party apps that do not apply to a closed CA policies (e.g., to require MFA or device compliance to all users and all apps),
 // enriched with details about delegated permissions, EntraOps classification, and known bypasses by EntraScopes.com or Microsoft documentation.
 // The query needs to be executed in Microsoft Defender XDR Advanced Hunting (with integrated Sentinel workspace).
 let EntraScopesBypasses = externaldata(AppID: string, ProtectionBypass: string, ResourcesAndScopes: string, CurrentState: string, Description: string)['https://entrascopes.com/bypasses.json'] with(format='singlejson')
@@ -20,7 +20,8 @@ let EntraScopes = externaldata(apps: dynamic)['https://entrascopes.com/firstpart
     | extend IsFoci = tobool(apps[ApplicationId].foci)
     | project ApplicationId, IsFoci;
 // The following bypasses are by design and documented: https://learn.microsoft.com/en-us/entra/identity/conditional-access/concept-conditional-access-cloud-apps#conditional-access-behavior-when-an-all-resources-policy-has-an-app-exclusion
-let KnownBypassByDesign = dynamic(['email','openid','offline_access','profile','User.Read','People.Read']); 
+let KnownBypassForNativeSpaByDesign = dynamic(['email','openid','offline_access','profile','User.Read','People.Read']); 
+let KnownBypassForConfidentialClientByDesign = dynamic(['email', 'offline_access', 'openid', 'profile', 'User.Read', 'User.Read.All', 'User.ReadBasic.All', 'People.Read', 'People.Read.All', 'GroupMember.Read.All', 'Member.Read.Hidden']);
 // Define which CA controls should be included
 let IncludedControls = dynamic(['Mfa','RequireCompliantDevice']); // For example 'Mfa', 'RequireCompliantDevice' or 'Block'
 // Define exclusions for CA policies (by policy name) that should not be considered
@@ -30,60 +31,68 @@ let ExcludedAppId = dynamic(['']);
 // Lookup EntraOps classification
 let SensitiveMsGraphPermissions = externaldata(EAMTierLevelName: string, Category: string, AppRoleDisplayName: string)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_AppRoles.json"] with(format='multijson');
 AADSignInEventsBeta
-    | where IsGuestUser == "0" and ErrorCode == "0"
-    | where ApplicationId !in (ExcludedAppId)
-    | mv-apply BypassPolicy = parse_json(ConditionalAccessPolicies) to typeof(dynamic) on (
-        where (BypassPolicy.includeRulesSatisfied contains "allApps" and BypassPolicy.excludeRulesSatisfied contains "appId" and parse_json(BypassPolicy)["result"] == "notApplied")
-        and BypassPolicy.displayName !in~ (ExcludedPolicies)
-        and BypassPolicy.enforcedGrantControls[0] in (IncludedControls)
-    )
-    | extend BypassPolicyName = tostring(parse_json(BypassPolicy)["displayName"])
-    | extend BypassPolicyControl = parse_json(BypassPolicy)["enforcedGrantControls"]
-    | mv-expand parse_json(BypassPolicy)["excludeRulesSatisfied"]
-    | where parse_json(BypassPolicy_excludeRulesSatisfied)["ruleSatisfied"] == "appId"
-    // Filter and enrichment to EntraScopes, remove the line if you like to see also non-first party apps or any app which is not listed in EntraScopes
-    | join kind = inner (EntraScopes ) on ApplicationId
-    | join kind = leftouter (
-        union SigninLogs, AADNonInteractiveUserSignInLogs
-        | extend AuthProcessDetails = replace_string(AuthenticationProcessingDetails, " " , "")
-        | extend AuthProcessDetails = replace_string(AuthProcessDetails, "\r\n" , "")
-        | parse AuthProcessDetails with * "OauthScopeInfo\",\"value\":\"" OauthScopeInfo "\"}" *
-        | extend OAuthDelegatedScope = replace_string(OauthScopeInfo, '\\', '')
-        | mv-expand parse_json(OAuthDelegatedScope)
-        | extend AppRoleDisplayName = tostring(OAuthDelegatedScope)   
-        | join kind=leftouter(
-                SensitiveMsGraphPermissions
-                | project AppRolePermissionTierLevel = tostring(EAMTierLevelName), AppRoleCategory = tostring(Category), tostring(AppRoleDisplayName)
-        ) on AppRoleDisplayName
-        | extend OAuthDelegatedScope = case(
-            isnotempty(AppRoleDisplayName),
-            bag_pack_columns(AppRoleDisplayName, AppRolePermissionTierLevel, AppRoleCategory),
-            ''
-        )
-        | summarize OAuthDelegatedScopes = make_set(OAuthDelegatedScope), AppRoles = make_set(AppRoleDisplayName) by CorrelationId, RequestId = OriginalRequestId, UniqueTokenIdentifier
-    ) on CorrelationId, RequestId
-    | extend AffectedCaPolicy = bag_pack_columns(BypassPolicy)
-    | join kind = leftouter ( EntraScopesBypasses ) on ApplicationId, ResourceId
-    | extend MatchedSignInBypassAppRoles = set_intersect(AppRoles, KnownBypassAppRoles)
-    | extend MatchedSignInBypassAppRolesByDesign = set_intersect(AppRoles, KnownBypassByDesign)
-    | extend MatchedSignInBypassControl = set_intersect(BypassPolicyControl, KnownBypassControls)
-    | extend MatchedKnownBypass = case(
-        array_length(AppRoles) == array_length(MatchedSignInBypassAppRoles), "Full - listed in Entrascopes.com",
-        isnotempty(MatchedSignInBypassAppRoles), "Partial - listed in Entrascopes.com",
-        array_length(AppRoles) == array_length(MatchedSignInBypassAppRolesByDesign), "Full - Excluded by Microsoft as low privilege scopes from policy enforcement",
-        isnotempty(MatchedSignInBypassControl), "Partial - Excluded by Microsoft as low privilege scopes from policy enforcement",
-        isempty(OAuthDelegatedScopes[0]), "None - Bypass does not include delegated API permissions",
-        isnotempty(OAuthDelegatedScopes), "None - Bypass includes delegated API permissions",
-        "None"
-    )
-    | extend Resource = bag_pack_columns(ResourceDisplayName, ResourceId, ResourceTenantId, OAuthDelegatedScopes)
-    | extend MatchedCriterias = bag_pack_columns(MatchedSignInBypassAppRoles, MatchedSignInBypassControl)
-    | extend MatchedCriterias = case(
-        MatchedKnownBypass contains "listed in Entrascopes.com", bag_pack_columns(MatchedSignInBypassAppRoles, MatchedSignInBypassControl),
-        MatchedKnownBypass contains "Excluded by Microsoft", bag_pack_columns(MatchedSignInBypassAppRolesByDesign, BypassPolicyControl),
+| where IsGuestUser == "0" and ErrorCode == "0"
+| where ApplicationId !in (ExcludedAppId)
+| mv-apply BypassPolicy = parse_json(ConditionalAccessPolicies) to typeof(dynamic) on (
+    where (
+    BypassPolicy.includeRulesSatisfied contains "allApps" and BypassPolicy.displayName !in~ (ExcludedPolicies)
+    and ((BypassPolicy.excludeRulesSatisfied contains "appId" and (parse_json(BypassPolicy)["result"] == "notApplied")) or parse_json(BypassPolicy)["result"] == "failure"))
+    and BypassPolicy.enforcedGrantControls[0] in (IncludedControls)
+)
+| extend BypassPolicyName = tostring(parse_json(BypassPolicy)["displayName"])
+| extend BypassPolicyControl = parse_json(BypassPolicy)["enforcedGrantControls"]
+// Filter for Conditional Access Policies which includes user and not applied or failed policy status on successful sign-in
+| where parse_json(BypassPolicy)["includeRulesSatisfied"] contains "userId" or parse_json(BypassPolicy)["includeRulesSatisfied"] contains "allUsers"
+| where parse_json(BypassPolicy)["excludeRulesSatisfied"] contains "appId" or parse_json(BypassPolicy)["result"] == "failure"
+// Filter and enrichment to EntraScopes, remove the line if you like to see also non-first party apps or any app which is not listed in EntraScopes
+| join kind = inner (EntraScopes ) on ApplicationId
+| join kind = leftouter (
+    union SigninLogs, AADNonInteractiveUserSignInLogs
+    | extend AuthProcessDetails = replace_string(AuthenticationProcessingDetails, " " , "")
+    | extend AuthProcessDetails = replace_string(AuthProcessDetails, "\r\n" , "")
+    // Used client credentials as indicator for Confidential Client
+    | extend IsConfidentialClient = iff(ClientCredentialType != "none" or isnotempty(ClientCredentialType), true, false)
+    | parse AuthProcessDetails with * "OauthScopeInfo\",\"value\":\"" OauthScopeInfo "\"}" *
+    | extend OAuthDelegatedScope = replace_string(OauthScopeInfo, '\\', '')
+    | mv-expand parse_json(OAuthDelegatedScope)
+    | extend AppRoleDisplayName = tostring(OAuthDelegatedScope)   
+    | join kind=leftouter(
+            SensitiveMsGraphPermissions
+            | project AppRolePermissionTierLevel = tostring(EAMTierLevelName), AppRoleCategory = tostring(Category), tostring(AppRoleDisplayName)
+    ) on AppRoleDisplayName
+    | extend OAuthDelegatedScope = case(
+        isnotempty(AppRoleDisplayName),
+        bag_pack_columns(AppRoleDisplayName, AppRolePermissionTierLevel, AppRoleCategory),
         ''
     )
-    | summarize SignInStartTime = min(Timestamp), SignInEndTime = max(Timestamp), MatchedCriterias = make_set(MatchedCriterias), Resources = make_set(Resource), AffectedCaPolicies = make_set(AffectedCaPolicy), BypassControl = array_sort_asc(make_set(BypassPolicyControl)), KnownBypassControls = make_set(KnownBypassControls), NumberOfSignIns = dcount(CorrelationId), AffectedRequestIds = make_set(RequestId), AffectedUniqueTokenIds = make_set(UniqueTokenIdentifier)
-                by Application, ApplicationId, CurrentBypassState, IsFoci, MatchedKnownBypass, BypassDescription
-    | project-reorder Application, ApplicationId, MatchedKnownBypass, MatchedCriterias, CurrentBypassState, BypassDescription, IsFoci, Resources, NumberOfSignIns, BypassControl, KnownBypassControls, AffectedCaPolicies, AffectedRequestIds, AffectedUniqueTokenIds
-    | sort by Application asc
+    | extend AadMsGraphAppRoles = iff(ResourceDisplayName == "Microsoft Graph" or ResourceDisplayName == "Windows Azure Active Directory", AppRoleDisplayName, "")
+    | summarize OAuthDelegatedScopes = make_set(OAuthDelegatedScope), AadMsGraphAppRoles = make_set(AadMsGraphAppRoles), AppRoles = make_set(AppRoleDisplayName) by CorrelationId, RequestId = OriginalRequestId, UniqueTokenIdentifier, IsConfidentialClient
+) on CorrelationId, RequestId
+| extend AffectedCaPolicy = bag_pack_columns(BypassPolicy)
+| join kind = leftouter ( EntraScopesBypasses ) on ApplicationId, ResourceId
+| extend MatchedSignInBypassAppRoles = set_intersect(AppRoles, KnownBypassAppRoles)
+| extend MatchedSignInBypassAppRolesByDesign = iff(
+    IsConfidentialClient == true, set_intersect(AadMsGraphAppRoles, KnownBypassForConfidentialClientByDesign),
+    set_intersect(AadMsGraphAppRoles, KnownBypassForNativeSpaByDesign)
+    )
+| extend MatchedSignInBypassControl = set_intersect(BypassPolicyControl, KnownBypassControls)
+| extend MatchedKnownBypass = case(
+    array_length(AppRoles) == array_length(MatchedSignInBypassAppRoles), "Full - listed in Entrascopes.com",
+    isnotempty(MatchedSignInBypassAppRoles), "Partial - listed in Entrascopes.com",
+    array_length(AppRoles) == array_length(MatchedSignInBypassAppRolesByDesign), "Full - Excluded by Microsoft as low privilege scopes from policy enforcement",
+    isnotempty(MatchedSignInBypassControl), "Partial - Excluded by Microsoft as low privilege scopes from policy enforcement",
+    isempty(OAuthDelegatedScopes[0]), "None - Bypass does not include delegated API permissions",
+    isnotempty(OAuthDelegatedScopes), "None - Bypass includes delegated API permissions",
+    "None"
+)
+| extend Resource = bag_pack_columns(ResourceDisplayName, ResourceId, ResourceTenantId, OAuthDelegatedScopes)
+| extend MatchedCriterias = bag_pack_columns(MatchedSignInBypassAppRoles, MatchedSignInBypassControl)
+| extend MatchedCriterias = case(
+    MatchedKnownBypass contains "listed in Entrascopes.com", bag_pack_columns(MatchedSignInBypassAppRoles, MatchedSignInBypassControl),
+    MatchedKnownBypass contains "Excluded by Microsoft", bag_pack_columns(MatchedSignInBypassAppRolesByDesign, BypassPolicyControl),
+    ''
+)
+| summarize SignInStartTime = min(Timestamp), SignInEndTime = max(Timestamp), MatchedCriterias = make_set(MatchedCriterias), Resources = make_set(Resource), AffectedCaPolicies = make_set(AffectedCaPolicy), BypassControl = array_sort_asc(make_set(BypassPolicyControl)), KnownBypassControls = make_set(KnownBypassControls), NumberOfSignIns = dcount(CorrelationId), AffectedRequestIds = make_set(RequestId), AffectedUniqueTokenIds = make_set(UniqueTokenIdentifier)
+            by Application, ApplicationId, CurrentBypassState, IsFoci, IsConfidentialClient, MatchedKnownBypass, BypassDescription
+| project-reorder Application, ApplicationId, MatchedKnownBypass, MatchedCriterias, CurrentBypassState, BypassDescription, IsFoci, IsConfidentialClient, Resources, NumberOfSignIns, BypassControl, KnownBypassControls, AffectedCaPolicies, AffectedRequestIds, AffectedUniqueTokenIds
+| sort by Application asc
