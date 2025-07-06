@@ -50,6 +50,22 @@ AADSignInEventsBeta
     union SigninLogs, AADNonInteractiveUserSignInLogs
     | extend AuthProcessDetails = replace_string(AuthenticationProcessingDetails, " " , "")
     | extend AuthProcessDetails = replace_string(AuthProcessDetails, "\r\n" , "")
+    // Details of Auth Method Details
+    | mv-expand parse_json(AuthenticationDetails)
+    | extend AuthMethodStepDetail = tostring(parse_json(AuthenticationDetails).authenticationStepResultDetail)
+    | extend AuthMethod = iff(isnotempty(tostring(parse_json(AuthenticationDetails).authenticationMethod)), tostring(parse_json(AuthenticationDetails).authenticationMethod), "Unknown")
+    // Details of Device
+    | extend DeviceDetail = coalesce(todynamic(DeviceDetail_string), DeviceDetail_dynamic)
+    | extend TrustType = iff(isempty(parse_json(DeviceDetail)["trustType"]), "No trust type", tostring(parse_json(DeviceDetail)["trustType"]))
+    | extend RiskLevel = iff(isempty(RiskLevel), "none", RiskLevel)
+    | extend DeviceComplianceStatus = case(
+        isempty(parse_json(DeviceDetail)["isCompliant"]), "Not available",
+        parse_json(DeviceDetail)["isCompliant"] == true, "Compliant",
+        parse_json(DeviceDetail)["isCompliant"] == false, "Not compliant",
+        "Unknown"
+    )
+    // Risk Level
+    | extend RiskLevel = iff(isempty(RiskLevel), "none", RiskLevel)    
     // Used client credentials as indicator for Confidential Client
     | extend IsConfidentialClient = iff(ClientCredentialType != "none" or isnotempty(ClientCredentialType), true, false)
     | parse AuthProcessDetails with * "OauthScopeInfo\",\"value\":\"" OauthScopeInfo "\"}" *
@@ -66,7 +82,7 @@ AADSignInEventsBeta
         ''
     )
     | extend AadMsGraphAppRoles = iff(ResourceDisplayName == "Microsoft Graph" or ResourceDisplayName == "Windows Azure Active Directory", AppRoleDisplayName, "")
-    | summarize OAuthDelegatedScopes = make_set(OAuthDelegatedScope), AadMsGraphAppRoles = make_set(AadMsGraphAppRoles), AppRoles = make_set(AppRoleDisplayName) by CorrelationId, RequestId = OriginalRequestId, UniqueTokenIdentifier, IsConfidentialClient
+    | summarize OAuthDelegatedScopes = make_set(OAuthDelegatedScope), AadMsGraphAppRoles = make_set(AadMsGraphAppRoles), AppRoles = make_set(AppRoleDisplayName) by CorrelationId, RequestId = OriginalRequestId, UniqueTokenIdentifier, IsConfidentialClient, RiskState, RiskLevelDuringSignIn, TrustType, DeviceComplianceStatus, AuthMethod
 ) on CorrelationId, RequestId
 | extend AffectedCaPolicy = bag_pack_columns(BypassPolicy)
 | join kind = leftouter ( EntraScopesBypasses ) on ApplicationId, ResourceId
@@ -92,7 +108,8 @@ AADSignInEventsBeta
     MatchedKnownBypass contains "Excluded by Microsoft", bag_pack_columns(MatchedSignInBypassAppRolesByDesign, BypassPolicyControl),
     ''
 )
-| summarize SignInStartTime = min(Timestamp), SignInEndTime = max(Timestamp), MatchedCriterias = make_set(MatchedCriterias), Resources = make_set(Resource), AffectedCaPolicies = make_set(AffectedCaPolicy), BypassControl = array_sort_asc(make_set(BypassPolicyControl)), KnownBypassControls = make_set(KnownBypassControls), NumberOfSignIns = dcount(CorrelationId), AffectedRequestIds = make_set(RequestId), AffectedUniqueTokenIds = make_set(UniqueTokenIdentifier)
+| summarize SignInStartTime = min(Timestamp), SignInEndTime = max(Timestamp), MatchedCriterias = make_set(MatchedCriterias), Resources = make_set(Resource), AffectedCaPolicies = make_set(AffectedCaPolicy), BypassControl = array_sort_asc(make_set(BypassPolicyControl)), KnownBypassControls = make_set(KnownBypassControls),
+            NumberOfSignIns = dcount(CorrelationId), AffectedRequestIds = make_set(RequestId), AffectedUniqueTokenIds = make_set(UniqueTokenIdentifier), RiskStates = make_set(RiskState), RiskLevels = make_set(RiskLevelDuringSignIn), TrustTypes = make_set(TrustType), DeviceCompliance = make_set(DeviceComplianceStatus), AuthenticationMethods = make_set(AuthMethod)
             by Application, ApplicationId, CurrentBypassState, IsFoci, IsConfidentialClient, MatchedKnownBypass, BypassDescription
-| project-reorder Application, ApplicationId, MatchedKnownBypass, MatchedCriterias, CurrentBypassState, BypassDescription, IsFoci, IsConfidentialClient, Resources, NumberOfSignIns, BypassControl, KnownBypassControls, AffectedCaPolicies, AffectedRequestIds, AffectedUniqueTokenIds
+| project-reorder RiskLevels, DeviceCompliance, AuthenticationMethods, RiskStates, Application, ApplicationId, MatchedKnownBypass, MatchedCriterias, CurrentBypassState, BypassDescription, IsFoci, IsConfidentialClient, Resources, NumberOfSignIns, BypassControl, KnownBypassControls, AffectedCaPolicies, AffectedRequestIds, AffectedUniqueTokenIds
 | sort by Application asc
