@@ -4,6 +4,12 @@
 // Looking for sign-ins of first-party apps that do not apply to a closed CA policies (e.g., to require MFA or device compliance to all users and all apps),
 // enriched with details about delegated permissions, EntraOps classification, and known bypasses by EntraScopes.com or Microsoft documentation.
 // The query needs to be executed in Microsoft Defender XDR Advanced Hunting (with integrated Sentinel workspace).
+// Looking for sign-ins of first-party apps that do not apply to a closed CA policies (e.g., to require MFA or device compliance to all users and all apps),
+// enriched with details about delegated permissions, EntraOps classification, and known bypasses by EntraScopes.com or Microsoft documentation.
+// The query needs to be executed in Microsoft Defender XDR Advanced Hunting (with integrated Sentinel workspace).
+// Looking for sign-ins of first-party apps that do not apply to a closed CA policies (e.g., to require MFA or device compliance to all users and all apps),
+// enriched with details about delegated permissions, EntraOps classification, and known bypasses by EntraScopes.com or Microsoft documentation.
+// The query needs to be executed in Microsoft Defender XDR Advanced Hunting (with integrated Sentinel workspace).
 let EntraScopesBypasses = externaldata(AppID: string, ProtectionBypass: string, ResourcesAndScopes: string, CurrentState: string, Description: string)['https://entrascopes.com/bypasses.json'] with(format='singlejson')
     | mv-expand ResourcesAndScope = parse_json(ResourcesAndScopes)
     | mv-expand ResourceId = bag_keys(ResourcesAndScope)
@@ -57,7 +63,6 @@ AADSignInEventsBeta
     // Details of Device
     | extend DeviceDetail = coalesce(todynamic(DeviceDetail_string), DeviceDetail_dynamic)
     | extend TrustType = iff(isempty(parse_json(DeviceDetail)["trustType"]), "No trust type", tostring(parse_json(DeviceDetail)["trustType"]))
-    | extend RiskLevel = iff(isempty(RiskLevel), "none", RiskLevel)
     | extend DeviceComplianceStatus = case(
         isempty(parse_json(DeviceDetail)["isCompliant"]), "Not available",
         parse_json(DeviceDetail)["isCompliant"] == true, "Compliant",
@@ -65,7 +70,7 @@ AADSignInEventsBeta
         "Unknown"
     )
     // Risk Level
-    | extend RiskLevel = iff(isempty(RiskLevel), "none", RiskLevel)    
+    | extend RiskState = iff(isempty(RiskState), "none", RiskState)
     // Used client credentials as indicator for Confidential Client
     | extend IsConfidentialClient = iff(ClientCredentialType != "none" or isnotempty(ClientCredentialType), true, false)
     | extend AuthProcessDetails = replace_string(AuthenticationProcessingDetails, " " , "")
@@ -111,7 +116,7 @@ AADSignInEventsBeta
     ''
 )
 | summarize SignInStartTime = min(Timestamp), SignInEndTime = max(Timestamp), MatchedCriterias = make_set(MatchedCriterias), Resources = make_set(Resource), AffectedCaPolicies = make_set(AffectedCaPolicy), BypassControl = array_sort_asc(make_set(BypassPolicyControl)), KnownBypassControls = make_set(KnownBypassControls),
-            NumberOfSignIns = dcount(CorrelationId), AffectedRequestIds = make_set(RequestId), AffectedUniqueTokenIds = make_set(UniqueTokenIdentifier), RiskStates = make_set(RiskState), RiskLevels = make_set(RiskLevelDuringSignIn), TrustTypes = make_set(TrustType), DeviceCompliance = make_set(DeviceComplianceStatus), TokenTypes = make_set(IncomingTokenType), Authentication = make_set(Authentication)
+            NumberOfSignIns = dcount(CorrelationId), AffectedRequestIds = make_set(RequestId), AffectedUniqueTokenIds = make_set(UniqueTokenIdentifier), RiskStates = make_set(RiskState1), RiskLevels = make_set(RiskLevelDuringSignIn1), TrustTypes = make_set(TrustType), DeviceCompliance = make_set(DeviceComplianceStatus), TokenTypes = make_set(IncomingTokenType), Authentication = make_set(Authentication)
             by Application, ApplicationId, CurrentBypassState, IsFoci, IsConfidentialClient, MatchedKnownBypass, BypassDescription
 | project-reorder Application, ApplicationId, MatchedKnownBypass, MatchedCriterias, CurrentBypassState, BypassDescription, IsFoci, IsConfidentialClient, Resources, NumberOfSignIns, BypassControl, KnownBypassControls, AffectedCaPolicies, AffectedRequestIds, AffectedUniqueTokenIds, Authentication, DeviceCompliance, RiskLevels, RiskStates
 | sort by Application asc
