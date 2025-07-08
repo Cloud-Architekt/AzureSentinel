@@ -48,14 +48,28 @@ AADSignInEventsBeta
 | join kind = inner (EntraScopes ) on ApplicationId
 | join kind = leftouter (
     union SigninLogs, AADNonInteractiveUserSignInLogs
-    | extend AuthProcessDetails = replace_string(AuthenticationProcessingDetails, " " , "")
-    | extend AuthProcessDetails = replace_string(AuthProcessDetails, "\r\n" , "")
+    | extend AuthMethod = coalesce(tostring(parse_json(AuthenticationDetails)[0].authenticationMethod), "Unknown")
+    | extend AuthStepResult = coalesce(tostring(parse_json(AuthenticationDetails)[0].authenticationStepResultDetail), "Unknown")
+    | extend Authentication = bag_pack_columns(AuthMethod, AuthStepResult)
+    // Details of Device
+    | extend DeviceDetail = coalesce(todynamic(DeviceDetail_string), DeviceDetail_dynamic)
+    | extend TrustType = iff(isempty(parse_json(DeviceDetail)["trustType"]), "No trust type", tostring(parse_json(DeviceDetail)["trustType"]))
+    | extend DeviceComplianceStatus = case(
+        isempty(parse_json(DeviceDetail)["isCompliant"]), "Not available",
+        parse_json(DeviceDetail)["isCompliant"] == true, "Compliant",
+        parse_json(DeviceDetail)["isCompliant"] == false, "Not compliant",
+        "Unknown"
+    )
+    // Risk Level
+    | extend RiskState = iff(isempty(RiskState), "none", RiskState)
     // Used client credentials as indicator for Confidential Client
     | extend IsConfidentialClient = iff(ClientCredentialType != "none" or isnotempty(ClientCredentialType), true, false)
+    | extend AuthProcessDetails = replace_string(AuthenticationProcessingDetails, " " , "")
+    | extend AuthProcessDetails = replace_string(AuthProcessDetails, "\r\n" , "")
     | parse AuthProcessDetails with * "OauthScopeInfo\",\"value\":\"" OauthScopeInfo "\"}" *
     | extend OAuthDelegatedScope = replace_string(OauthScopeInfo, '\\', '')
     | mv-expand parse_json(OAuthDelegatedScope)
-    | extend AppRoleDisplayName = tostring(OAuthDelegatedScope)   
+    | extend AppRoleDisplayName = tostring(OAuthDelegatedScope)
     | join kind=leftouter(
             SensitiveMsGraphPermissions
             | project AppRolePermissionTierLevel = tostring(EAMTierLevelName), AppRoleCategory = tostring(Category), tostring(AppRoleDisplayName)
@@ -66,7 +80,7 @@ AADSignInEventsBeta
         ''
     )
     | extend AadMsGraphAppRoles = iff(ResourceDisplayName == "Microsoft Graph" or ResourceDisplayName == "Windows Azure Active Directory", AppRoleDisplayName, "")
-    | summarize OAuthDelegatedScopes = make_set(OAuthDelegatedScope), AadMsGraphAppRoles = make_set(AadMsGraphAppRoles), AppRoles = make_set(AppRoleDisplayName) by CorrelationId, RequestId = OriginalRequestId, UniqueTokenIdentifier, IsConfidentialClient
+    | summarize Authentication = make_set(Authentication), OAuthDelegatedScopes = make_set(OAuthDelegatedScope), AadMsGraphAppRoles = make_set(AadMsGraphAppRoles), AppRoles = make_set(AppRoleDisplayName) by CorrelationId, RequestId = OriginalRequestId, UniqueTokenIdentifier, IsConfidentialClient, RiskState, RiskLevelDuringSignIn, TrustType, DeviceComplianceStatus, IncomingTokenType
 ) on CorrelationId, RequestId
 | extend AffectedCaPolicy = bag_pack_columns(BypassPolicy)
 | join kind = leftouter ( EntraScopesBypasses ) on ApplicationId, ResourceId
@@ -92,7 +106,8 @@ AADSignInEventsBeta
     MatchedKnownBypass contains "Excluded by Microsoft", bag_pack_columns(MatchedSignInBypassAppRolesByDesign, BypassPolicyControl),
     ''
 )
-| summarize SignInStartTime = min(Timestamp), SignInEndTime = max(Timestamp), MatchedCriterias = make_set(MatchedCriterias), Resources = make_set(Resource), AffectedCaPolicies = make_set(AffectedCaPolicy), BypassControl = array_sort_asc(make_set(BypassPolicyControl)), KnownBypassControls = make_set(KnownBypassControls), NumberOfSignIns = dcount(CorrelationId), AffectedRequestIds = make_set(RequestId), AffectedUniqueTokenIds = make_set(UniqueTokenIdentifier)
+| summarize SignInStartTime = min(Timestamp), SignInEndTime = max(Timestamp), MatchedCriterias = make_set(MatchedCriterias), Resources = make_set(Resource), AffectedCaPolicies = make_set(AffectedCaPolicy), BypassControl = array_sort_asc(make_set(BypassPolicyControl)), KnownBypassControls = make_set(KnownBypassControls),
+            NumberOfSignIns = dcount(CorrelationId), AffectedRequestIds = make_set(RequestId), AffectedUniqueTokenIds = make_set(UniqueTokenIdentifier), RiskStates = make_set(RiskState1), RiskLevels = make_set(RiskLevelDuringSignIn1), TrustTypes = make_set(TrustType), DeviceCompliance = make_set(DeviceComplianceStatus), TokenTypes = make_set(IncomingTokenType), Authentication = make_set(Authentication)
             by Application, ApplicationId, CurrentBypassState, IsFoci, IsConfidentialClient, MatchedKnownBypass, BypassDescription
-| project-reorder Application, ApplicationId, MatchedKnownBypass, MatchedCriterias, CurrentBypassState, BypassDescription, IsFoci, IsConfidentialClient, Resources, NumberOfSignIns, BypassControl, KnownBypassControls, AffectedCaPolicies, AffectedRequestIds, AffectedUniqueTokenIds
+| project-reorder Application, ApplicationId, MatchedKnownBypass, MatchedCriterias, CurrentBypassState, BypassDescription, IsFoci, IsConfidentialClient, Resources, NumberOfSignIns, BypassControl, KnownBypassControls, AffectedCaPolicies, AffectedRequestIds, AffectedUniqueTokenIds, Authentication, DeviceCompliance, RiskLevels, RiskStates
 | sort by Application asc
