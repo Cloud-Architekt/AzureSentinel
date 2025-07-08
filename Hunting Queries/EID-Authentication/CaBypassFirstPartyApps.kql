@@ -1,15 +1,6 @@
 // Looking for sign-ins of first-party apps that do not apply to a closed CA policies (e.g., to require MFA or device compliance to all users and all apps),
 // enriched with details about delegated permissions, EntraOps classification, and known bypasses by EntraScopes.com or Microsoft documentation.
 // The query needs to be executed in Microsoft Defender XDR Advanced Hunting (with integrated Sentinel workspace).
-// Looking for sign-ins of first-party apps that do not apply to a closed CA policies (e.g., to require MFA or device compliance to all users and all apps),
-// enriched with details about delegated permissions, EntraOps classification, and known bypasses by EntraScopes.com or Microsoft documentation.
-// The query needs to be executed in Microsoft Defender XDR Advanced Hunting (with integrated Sentinel workspace).
-// Looking for sign-ins of first-party apps that do not apply to a closed CA policies (e.g., to require MFA or device compliance to all users and all apps),
-// enriched with details about delegated permissions, EntraOps classification, and known bypasses by EntraScopes.com or Microsoft documentation.
-// The query needs to be executed in Microsoft Defender XDR Advanced Hunting (with integrated Sentinel workspace).
-// Looking for sign-ins of first-party apps that do not apply to a closed CA policies (e.g., to require MFA or device compliance to all users and all apps),
-// enriched with details about delegated permissions, EntraOps classification, and known bypasses by EntraScopes.com or Microsoft documentation.
-// The query needs to be executed in Microsoft Defender XDR Advanced Hunting (with integrated Sentinel workspace).
 let EntraScopesBypasses = externaldata(AppID: string, ProtectionBypass: string, ResourcesAndScopes: string, CurrentState: string, Description: string)['https://entrascopes.com/bypasses.json'] with(format='singlejson')
     | mv-expand ResourcesAndScope = parse_json(ResourcesAndScopes)
     | mv-expand ResourceId = bag_keys(ResourcesAndScope)
