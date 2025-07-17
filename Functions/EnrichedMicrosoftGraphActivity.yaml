@@ -1,7 +1,7 @@
-id: 0cd18905-c644-4ad1-b70d-95195620ed98
+id: 8bbdc1c2-9f3d-4ac1-9aae-ae7cf6d1f9bc
 Function:
   Title: 'Function to get enrichment for GraphAPIAuditEvents with critical assets from Exposure Management, EntraOps Graph API permissions and action classification.'
-  Version: '1.1.0'
+  Version: '1.0.0'
   LastUpdated: '2025-07-17'
 Category: Microsoft Defender XDR Function
 FunctionName: EnrichedMicrosoftGraphActivity
