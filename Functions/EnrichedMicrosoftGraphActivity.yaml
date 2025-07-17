@@ -1,0 +1,80 @@
+id: 0cd18905-c644-4ad1-b70d-95195620ed98
+Function:
+  Title: 'Function to get enrichment for GraphAPIAuditEvents with critical assets from Exposure Management, EntraOps Graph API permissions and action classification.'
+  Version: '1.1.0'
+  LastUpdated: '2025-07-17'
+Category: Microsoft Defender XDR Function
+FunctionName: EnrichedMicrosoftGraphActivity
+FunctionAlias: EnrichedMicrosoftGraphActivity
+FunctionQuery: |    
+  let EnrichedMicrosoftGraphActivity = (CallerObjectId:string="", ScopeEamClassification:string="", GraphRequestId:string="") {
+    let XspmCriticalAadObjectIds = ExposureGraphNodes
+      | mv-expand EntityIds
+      | extend EntityType = parse_json(EntityIds)
+      | where EntityType["type"] == "AadObjectId"
+      | mv-expand CriticalityData = parse_json(NodeProperties)["rawData"]["criticalityLevel"]["ruleNames"]
+      | extend CriticalityLevel = toint(parse_json(NodeProperties)["rawData"]["criticalityLevel"]["criticalityLevel"])
+      | extend RuleName = tostring(CriticalityData)
+      | extend ObjectId = iff(EntityType["type"] == "AadObjectId", tolower(tostring(extract("objectid=([\\w-]+)", 1, tostring(parse_json(EntityIds)["id"])))), tolower(tostring(EntityType["id"])))
+      | where isnotempty(CriticalityLevel)
+      | extend CriticalAssetDetail = bag_pack_columns(CriticalityLevel, RuleName)
+      | summarize CriticalityLevel = min(CriticalityLevel), CriticalAssetDetails = array_sort_asc(make_set(CriticalAssetDetail)) by ObjectId, ObjectIdType = tostring(EntityType["type"]), NodeId, NodeName;
+    // Minimal Value of Critical Asset which will be classify as sensitive caller or target (default: 2 or lower)
+    let MinCriticalAssetValue = 2;
+    let SensitiveMsGraphPermissions = externaldata(AppRoleDisplayName: string, AppRoleId: string, AppId: string, EAMTierLevelName: string, Category: string)
+        ["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_AppRoles.json"] with(format='multijson');
+    let ControlPlaneScopes = SensitiveMsGraphPermissions | where EAMTierLevelName == "ControlPlane" | summarize by AppRoleDisplayName;
+    let ManagementPlaneScopes = SensitiveMsGraphPermissions | where EAMTierLevelName == "ManagementPlane" | summarize by AppRoleDisplayName;
+    let PrivilegedGraphOperationsUri = (externaldata(Uri:string)
+        [@"https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/refs/heads/main/PrivilegedOperations/GraphApiRequest.csv"] with (format="csv", ignoreFirstRecord=true)
+    );
+    let PrivilegedGraphOperationsExcludeMatches = @"(getMember|checkMember|[0-9a-fA-F-]{36}/(threads|drive|messages))";
+    let PrivilegedGraphOperations = dynamic([
+        'PATCH',
+        'POST',
+        'DELETE'
+    ]);
+    GraphAPIAuditEvents
+    // Build schema similiar to MicrosoftGraphActivityLogs
+    | where (CallerObjectId == "" or AccountObjectId == CallerObjectId)
+    | where (GraphRequestId == "" or ClientRequestId == GraphRequestId)
+    | extend UserId = iff(EntityType == "user",AccountObjectId,"")
+    | extend ServicePrincipalId = iff(EntityType == "app",AccountObjectId,"")
+    | extend ResponseStatusCode = toint(ResponseStatusCode)
+    | extend RequestDuration = toint(RequestDuration)
+    | extend RequestId = OperationId
+    | project-rename AppId = ApplicationId, DurationMs = RequestDuration
+    | project-away AccountObjectId, EntityType, ReportId
+    // Parsing Uri for Enrichment (by Fabian Bader: https://cloudbrothers.info/en/detect-threats-microsoft-graph-logs-part-1/)
+    | extend ParsedUri = parse_url(RequestUri)
+    | extend NormalizedRequestUri = tostring(ParsedUri.Path)
+    | extend NormalizedRequestUri = replace_string(NormalizedRequestUri, '//', '/')
+    | extend RequestTargetObjectId = extract(@'[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}', 0, NormalizedRequestUri)
+    | extend NormalizedRequestUri = replace_regex(NormalizedRequestUri, @'[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}', @'<UUID>'), ParsedUri
+    // Enrichment with Critical Asset Management
+    | extend CallerObjectId = coalesce(UserId, ServicePrincipalId)
+    | extend CallerEntityType = iff(isnotempty(UserId), "User", "ServicePrincipal")
+    | join kind = leftouter ( XspmCriticalAadObjectIds | project CallerObjectId = ObjectId, CallerCriticalityLevel = CriticalityLevel, CallerCriticalAssetDetails = CriticalAssetDetails ) on CallerObjectId
+    | join kind = leftouter ( XspmCriticalAadObjectIds | project RequestTargetObjectId = ObjectId, TargetCriticalityLevel = CriticalityLevel, TargetCriticalAssetDetails = CriticalAssetDetails ) on RequestTargetObjectId
+    | extend IsSensitiveCaller = iff(CallerCriticalityLevel <(MinCriticalAssetValue), true, false)
+    | extend IsSensitiveTarget = iff(TargetCriticalityLevel <(MinCriticalAssetValue), true, false)
+    // Enrichment with EntraOps App Role Classification
+    | extend ScopesArray = split(Scopes, ' ')
+    | extend ScopeClassification = case(
+        isempty(Scopes), "Unknown",
+        ScopesArray has_any (ControlPlaneScopes), "ControlPlane",
+        ScopesArray has_any (ManagementPlaneScopes), "ManagementPlane",
+        "UserAccess"
+    )
+    | where (ScopeEamClassification == "" or ScopeClassification == ScopeEamClassification)
+    | extend IsHighSensitiveScope = iff(ScopeClassification == "ControlPlane", true, false)
+    | extend IsSensitiveAction = iff((
+        NormalizedRequestUri has_any(PrivilegedGraphOperationsUri)
+        and not(RequestUri matches regex "(getMemberGroups|checkMemberGroups|checkMemberObjects|getMemberObjects|estimateAccess|checkAccess)$")
+        and not(NormalizedRequestUri matches regex "/(drive|messages|threads|teamwork|onlinemeetings|onlineMeetings|events)")
+        and RequestMethod in~ (PrivilegedGraphOperations)) == true, true, false
+    )
+    | project-away ParsedUri, NormalizedRequestUri, RequestTargetObjectId, CallerObjectId1, RequestTargetObjectId, RequestTargetObjectId1, ScopesArray
+    | project-reorder Timestamp, Type, ClientRequestId, OperationId, CallerObjectId, CallerEntityType, CallerCriticalityLevel, CallerCriticalAssetDetails, IsSensitiveCaller, Scopes, ScopeClassification, IsHighSensitiveScope, RequestUri, RequestMethod, ResponseStatusCode, IsSensitiveAction, IsSensitiveTarget, TargetCriticalityLevel, TargetCriticalAssetDetails
+  };
+  EnrichedMicrosoftGraphActivity(CallerObjectId="", ScopeEamClassification="", GraphRequestId="")
