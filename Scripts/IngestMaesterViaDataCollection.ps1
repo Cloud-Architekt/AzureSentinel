@@ -94,7 +94,7 @@ foreach ($TestResult in $TestResultsCleanJSON) {
 
     $TableIndex = -1 #get all tables
     
-    $xml = [xml]("<root>$Html</root>")
+    $xml = [xml]("<root>$TestResultDetail</root>")
     $tables = $xml.SelectNodes('//table')
     if (-not $tables) { return }
 
