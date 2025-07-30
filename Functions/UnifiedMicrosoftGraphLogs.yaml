@@ -1,0 +1,45 @@
+id: 1c20cf22-66db-4b7a-93c7-6fff8526e660
+Function:
+  Title: 'Function that normalizes the schema of GraphApiAuditEvents to match that of MicrosoftGraphActivityLogs. Optional, only the columns that are common to both tables are returned. In environments with availability of MicrosoftGraphActivityLogs, create a function with the same name which simply returns all entries of the table.'
+  Version: '1.0.0'
+  LastUpdated: '2025-07-30'
+Category: Microsoft Defender XDR Function
+FunctionName: UnifiedMicrosoftGraphLogs
+FunctionAlias: UnifiedMicrosoftGraphLogs
+FunctionQuery: |    
+let UnifiedMicrosoftGraphLogs = (CallerObjectId:string="", CallerIpAddress:string="", GraphRequestId:string="", UniqueTokenId:string="") {
+    GraphAPIAuditEvents
+    | where (CallerObjectId == "" or AccountObjectId == CallerObjectId)
+    | where (CallerIpAddress == "" or IpAddress == CallerIpAddress)
+    | where (GraphRequestId == "" or ClientRequestId == GraphRequestId)
+    | where (UniqueTokenId == "" or UniqueTokenIdentifier == UniqueTokenId)    
+    | extend UserId = iff(EntityType == "user",AccountObjectId,"")
+    | extend ServicePrincipalId = iff(EntityType == "app",AccountObjectId,"")
+    | extend ResponseStatusCode = toint(ResponseStatusCode)
+    | extend RequestDuration = toint(RequestDuration)
+    | extend SignInActivityId = tostring(UniqueTokenIdentifier)
+    | extend RequestId = OperationId    
+    | project-rename AppId = ApplicationId, DurationMs = RequestDuration, IPAddress = IpAddress
+    // Remove columns which exists in GraphAPIAuditEvents but does not exists MicrosoftGraphActivityLogs
+    //| project-away Timestamp, AccountObjectId, EntityType, ReportId, UniqueTokenIdentifier, IdentityProvider
+    // Sort columns in similar order than MicrosoftGraphActivityLogs
+    | project-reorder 
+        TimeGenerated, 
+        Location, 
+        RequestId, 
+        OperationId, 
+        ClientRequestId, 
+        ApiVersion, 
+        RequestMethod, 
+        ResponseStatusCode, 
+        IPAddress, 
+        RequestUri, 
+        DurationMs, 
+        SignInActivityId, 
+        AppId, 
+        UserId, 
+        ServicePrincipalId, 
+        Scopes, 
+        Type
+};
+UnifiedMicrosoftGraphLogs(CallerObjectId,CallerIpAddress,GraphRequestId,UniqueTokenId)
