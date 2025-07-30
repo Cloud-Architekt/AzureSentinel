@@ -1,24 +1,33 @@
 id: 8bbdc1c2-9f3d-4ac1-9aae-ae7cf6d1f9bc
 Function:
   Title: 'Function to get enrichment for GraphAPIAuditEvents with critical assets from Exposure Management, EntraOps Graph API permissions and action classification.'
-  Version: '1.0.0'
-  LastUpdated: '2025-07-17'
+  Version: '1.1.0'
+  LastUpdated: '2025-07-30'
 Category: Microsoft Defender XDR Function
 FunctionName: EnrichedMicrosoftGraphActivity
 FunctionAlias: EnrichedMicrosoftGraphActivity
 FunctionQuery: |    
-  let EnrichedMicrosoftGraphActivity = (CallerObjectId:string="", ScopeEamClassification:string="", GraphRequestId:string="") {
+let EnrichedMicrosoftGraphActivity = (CallerObjectId:string="", CallerIpAddress:string="", ScopeEamClassification:string="", GraphRequestId:string="", UniqueTokenId:string="") {
     let XspmCriticalAadObjectIds = ExposureGraphNodes
-      | mv-expand EntityIds
-      | extend EntityType = parse_json(EntityIds)
-      | where EntityType["type"] == "AadObjectId"
-      | mv-expand CriticalityData = parse_json(NodeProperties)["rawData"]["criticalityLevel"]["ruleNames"]
-      | extend CriticalityLevel = toint(parse_json(NodeProperties)["rawData"]["criticalityLevel"]["criticalityLevel"])
-      | extend RuleName = tostring(CriticalityData)
-      | extend ObjectId = iff(EntityType["type"] == "AadObjectId", tolower(tostring(extract("objectid=([\\w-]+)", 1, tostring(parse_json(EntityIds)["id"])))), tolower(tostring(EntityType["id"])))
-      | where isnotempty(CriticalityLevel)
-      | extend CriticalAssetDetail = bag_pack_columns(CriticalityLevel, RuleName)
-      | summarize CriticalityLevel = min(CriticalityLevel), CriticalAssetDetails = array_sort_asc(make_set(CriticalAssetDetail)) by ObjectId, ObjectIdType = tostring(EntityType["type"]), NodeId, NodeName;
+    | mv-expand EntityIds
+    | extend EntityType = parse_json(EntityIds)
+    | where EntityType["type"] == "AadObjectId"
+    | mv-expand CriticalityData = parse_json(NodeProperties)["rawData"]["criticalityLevel"]["ruleNames"]
+    | extend CriticalityLevel = toint(parse_json(NodeProperties)["rawData"]["criticalityLevel"]["criticalityLevel"])
+    | extend RuleName = tostring(CriticalityData)
+    | extend ObjectId = iff(EntityType["type"] == "AadObjectId", tolower(tostring(extract("objectid=([\\w-]+)", 1, tostring(parse_json(EntityIds)["id"])))), tolower(tostring(EntityType["id"])))
+    | where isnotempty(CriticalityLevel)
+    | extend CriticalAssetDetail = bag_pack_columns(CriticalityLevel, RuleName)
+    // Summarize criticality and asset details by object and node information
+    | summarize 
+        CriticalityLevel = min(CriticalityLevel), 
+        CriticalAssetDetails = array_sort_asc(make_set(CriticalAssetDetail)) 
+    by 
+        ObjectId, 
+        ObjectIdType = tostring(EntityType["type"]), 
+        NodeId, 
+        NodeName
+    ;
     // Minimal Value of Critical Asset which will be classify as sensitive caller or target (default: 2 or lower)
     let MinCriticalAssetValue = 2;
     let SensitiveMsGraphPermissions = externaldata(AppRoleDisplayName: string, AppRoleId: string, AppId: string, EAMTierLevelName: string, Category: string)
@@ -35,16 +44,39 @@ FunctionQuery: |
         'DELETE'
     ]);
     GraphAPIAuditEvents
-    // Build schema similiar to MicrosoftGraphActivityLogs
     | where (CallerObjectId == "" or AccountObjectId == CallerObjectId)
+    | where (CallerIpAddress == "" or IpAddress == CallerIpAddress)    
     | where (GraphRequestId == "" or ClientRequestId == GraphRequestId)
+    | where (UniqueTokenId == "" or UniqueTokenIdentifier == UniqueTokenId)
+    // Build schema similiar to MicrosoftGraphActivityLogs
     | extend UserId = iff(EntityType == "user",AccountObjectId,"")
     | extend ServicePrincipalId = iff(EntityType == "app",AccountObjectId,"")
     | extend ResponseStatusCode = toint(ResponseStatusCode)
     | extend RequestDuration = toint(RequestDuration)
+    | extend SignInActivityId = tostring(UniqueTokenIdentifier)
     | extend RequestId = OperationId
-    | project-rename AppId = ApplicationId, DurationMs = RequestDuration
-    | project-away AccountObjectId, EntityType, ReportId
+    | project-rename AppId = ApplicationId, DurationMs = RequestDuration, IPAddress = IpAddress
+    // Remove columns which exists in GraphAPIAuditEvents but does not exists MicrosoftGraphActivityLogs
+    //| project-away AccountObjectId, EntityType, ReportId, UniqueTokenIdentifier, IdentityProvider
+    // Sort columns in similar order than MicrosoftGraphActivityLogs
+    | project-reorder 
+        TimeGenerated, 
+        Location, 
+        RequestId, 
+        OperationId, 
+        ClientRequestId, 
+        ApiVersion, 
+        RequestMethod, 
+        ResponseStatusCode, 
+        IPAddress, 
+        RequestUri, 
+        DurationMs, 
+        SignInActivityId, 
+        AppId, 
+        UserId, 
+        ServicePrincipalId, 
+        Scopes, 
+        Type
     // Parsing Uri for Enrichment (by Fabian Bader: https://cloudbrothers.info/en/detect-threats-microsoft-graph-logs-part-1/)
     | extend ParsedUri = parse_url(RequestUri)
     | extend NormalizedRequestUri = tostring(ParsedUri.Path)
@@ -76,5 +108,5 @@ FunctionQuery: |
     )
     | project-away ParsedUri, NormalizedRequestUri, RequestTargetObjectId, CallerObjectId1, RequestTargetObjectId, RequestTargetObjectId1, ScopesArray
     | project-reorder Timestamp, Type, ClientRequestId, OperationId, CallerObjectId, CallerEntityType, CallerCriticalityLevel, CallerCriticalAssetDetails, IsSensitiveCaller, Scopes, ScopeClassification, IsHighSensitiveScope, RequestUri, RequestMethod, ResponseStatusCode, IsSensitiveAction, IsSensitiveTarget, TargetCriticalityLevel, TargetCriticalAssetDetails
-  };
-  EnrichedMicrosoftGraphActivity(CallerObjectId="", ScopeEamClassification="", GraphRequestId="")
+};
+EnrichedMicrosoftGraphActivity(CallerObjectId,CallerIpAddress,ScopeEamClassification,GraphRequestId,UniqueTokenId)
