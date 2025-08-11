@@ -120,7 +120,8 @@ FunctionQuery: |
                 | join kind = leftouter (
                     SensitiveMsGraphPermissions
                 ) on AppId, AppRoleDisplayName
-                | extend ApiPermission = bag_pack_columns(AppId, AppDisplayName, AppRoleId, AppRoleDisplayName, InUse, PrivilegeLevel, Category, EAMTierLevelName)
+                | project-rename Classification = EAMTierLevelName
+                | extend ApiPermission = bag_pack_columns(AppId, AppDisplayName, AppRoleId, AppRoleDisplayName, InUse, PrivilegeLevel, Category, Classification)
                 | summarize ApiPermissions = make_set(ApiPermission) by ServicePrincipalId
         ) on ServicePrincipalId
         | project-away Permissions
