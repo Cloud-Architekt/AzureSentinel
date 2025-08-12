@@ -287,6 +287,7 @@ FunctionQuery: |
         | extend IsDeleted = iff(isnotempty(DeletedDateTime), "true", "false")
         | project-away ReportId, AssignedRoles, PrivilegedEntraPimRoles;
         union AllUsers, PrivilegedUsers, AllWorkloads
+        | extend AppId = OAuthAppId
         | extend Classification = case(
             isnotempty(Classification), Classification,
             TenantMembershipType == "Member", "UserAccess",
