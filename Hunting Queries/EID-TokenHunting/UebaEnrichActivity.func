@@ -1,0 +1,18 @@
+let UebaEnrichActivity = (AccountUpn:string, Lookback:timespan=1d, UserSessionId:string, UniqueTokenId:string) {
+    BehaviorAnalytics
+    | where TimeGenerated >ago(Lookback) and UserPrincipalName contains (AccountUpn)
+    | extend IPAddress = SourceIPAddress
+    | where isnotempty(UserPrincipalName)
+    | where ActivityType !contains "LogOn" and ActionType !contains "LogOn"
+    | join kind=inner (
+        union AADNonInteractiveUserSignInLogs, SigninLogs
+        | where SessionId contains (UserSessionId) and UniqueTokenIdentifier contains (UniqueTokenId)
+        | where CreatedDateTime >ago(Lookback) and UserPrincipalName contains (AccountUpn)
+    ) on UserPrincipalName, IPAddress, AppDisplayName, ResourceDisplayName
+    | project-rename SignInTime = CreatedDateTime, BehaviorActivityTime = TimeGenerated
+    | where (BehaviorActivityTime - SignInTime) between (0min .. 1h)
+    | project-reorder SessionId, BehaviorActivityTime, SignInTime
+    | extend SignInDetail = bag_pack_columns(SignInTime, AppDisplayName, ResourceDisplayName, RiskLevel, RiskLevelDuringSignIn, UniqueTokenIdentifier), SessionId
+    | summarize SignInDetails = make_set(SignInDetail), UsersInsights = make_set(UsersInsights), DevicesInsights = make_set(DevicesInsights), ActivityInsights = make_set(ActivityInsights) by BehaviorActivityTime, ActivityType, ActionType, InvestigationPriority, UserPrincipalName, SourceIPAddress
+};
+UebaEnrichActivity(AccountUpn="", UserSessionId="", UniqueTokenId="")

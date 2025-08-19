@@ -1,0 +1,31 @@
+let UebaSummary = (AccountUpn:string, Lookback:timespan=1d, UserSessionId:string, UniqueTokenId:string) {
+    BehaviorAnalytics
+    | where TimeGenerated >ago(Lookback) and UserPrincipalName contains (AccountUpn)
+    | where EventSource == "Azure AD"
+    | extend IPAddress = SourceIPAddress
+    | where isnotempty(UserPrincipalName) and isnotempty(ActivityInsights.App) and isnotempty(ActivityInsights.Resource)
+    | extend AppDisplayName = tostring(ActivityInsights.App), ResourceDisplayName = tostring(ActivityInsights.Resource)
+    | join kind=inner (
+        union AADNonInteractiveUserSignInLogs, SigninLogs
+        | where SessionId contains (UserSessionId) and UniqueTokenIdentifier contains (UniqueTokenId)
+        | where CreatedDateTime >ago(Lookback) and UserPrincipalName contains (AccountUpn)
+    ) on UserPrincipalName, IPAddress, AppDisplayName, ResourceDisplayName
+    | project-rename SignInTime = CreatedDateTime, UebaLogonTime = TimeGenerated
+    | where (UebaLogonTime - SignInTime) between (0min .. 1h)
+    | project-reorder SessionId, UebaLogonTime, SignInTime
+    | extend SignInDetail = bag_pack_columns(SignInTime, AppDisplayName, ResourceDisplayName, RiskLevel, RiskLevelDuringSignIn, SessionId, UniqueTokenIdentifier)
+    | extend UebaLogonDetail = bag_pack_columns(ActivityType, ActionType)
+    | summarize SignInDetails = make_set(SignInDetail), UebaLogonDetails = make_set(UebaLogonDetail), UebaLogonUsersInsights = make_set(UsersInsights), UebaLogonDevicesInsights = make_set(DevicesInsights), UebaLogonActivityInsights = make_set(ActivityInsights) by UebaLogonTime, UebaLogonInvestigationPriority = InvestigationPriority, UserPrincipalName, SourceIPAddress, RequestId = OriginalRequestId, UniqueTokenIdentifier
+    | join kind = leftouter (
+        BehaviorAnalytics
+        | where isnotempty(UserPrincipalName)    
+        | where TimeGenerated >ago(Lookback) and UserPrincipalName == (UserPrincipalName)
+        | extend IPAddress = SourceIPAddress
+        | where ActivityType !contains "LogOn" and ActionType !contains "LogOn"
+        | extend UebaActivityDetail = bag_pack_columns(ActivityType, ActionType, ActivityInsights)
+        | summarize UebaActivityDetails = make_set(UebaActivityDetail) by UebaActivityTime = TimeGenerated, UebaActivityInvestigationPriority = InvestigationPriority, UserPrincipalName, SourceIPAddress
+    ) on UserPrincipalName, SourceIPAddress
+    | where (UebaLogonTime - UebaActivityTime) between (0min .. 1h)
+    | project-reorder UebaLogonActivityInsights, UebaLogonInvestigationPriority, UebaActivityInvestigationPriority;
+};
+UebaSummary(AccountUpn="", UserSessionId="", UniqueTokenId="")

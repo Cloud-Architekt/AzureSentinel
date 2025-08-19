@@ -12,17 +12,17 @@ union SigninLogs, AADNonInteractiveUserSignInLogs
 // Expand device details
 | extend DeviceDetail = iff(isempty( DeviceDetail_dynamic ), todynamic(DeviceDetail_string), DeviceDetail_dynamic)
 | extend DeviceId = tostring(tolower(DeviceDetail.deviceId))
-| extend DeviceName = tostring(tolower(DeviceDetail.displayName))
+| extend DeviceName = tostring(toupper(DeviceDetail.displayName))
 // Expand Token Protection Status details
 | extend TokenProtectionStatus = iff(isempty( TokenProtectionStatusDetails_dynamic ), todynamic(TokenProtectionStatusDetails_string), TokenProtectionStatusDetails_dynamic)
 | extend SignInSessionStatus = tostring(TokenProtectionStatus.signInSessionStatus)
 // Correlate token acquisition with NetworkAccessTraffic logs from GSA
-| join kind = leftouter ( NetworkAccessTraffic
+| join kind = leftouter (
+    NetworkAccessTraffic
     | project TimeGenerated, TransactionId, ConnectionId, IPAddress = SourceIp, AgentVersion, UserId, DeviceId, UniqueTokenIdentifier = UniqueTokenId, InitiatingProcessName
 ) on UserId, DeviceId, UniqueTokenIdentifier, IPAddress
-| extend IsThroughGlobalSecureAccess = iff(isnotempty(TransactionId), true, false)
-// Summarize results for simplified view
-| project CreatedDateTime, SessionId, IncomingTokenType, SignInSessionStatus, UniqueTokenIdentifier, AppDisplayName, ResourceDisplayName, ClientAppUsed, IsThroughGlobalSecureAccess, InitiatingProcessName, IPAddress, Location, AutonomousSystemNumber
+// Summarize Results
+| project CreatedDateTime, SessionId, IncomingTokenType, SignInSessionStatus, UniqueTokenIdentifier, AppDisplayName, ResourceDisplayName, ClientAppUsed, IsThroughGlobalSecureAccess, InitiatingProcessName, IPAddress, GlobalSecureAccessIpAddress, Location, AutonomousSystemNumber
 // Optional: Filtering for specific SessionId
 //| where SessionId == @"<SessionId>"
 | sort by CreatedDateTime asc

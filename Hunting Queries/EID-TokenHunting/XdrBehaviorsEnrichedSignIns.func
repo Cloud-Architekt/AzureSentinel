@@ -1,0 +1,37 @@
+let XdrBehaviorsEnrichedSignIns = (AccountUpn:string, Lookback:timespan=30d, AccountIpAddress:string, RequestId:string) {
+    let UserPrincipalName = AccountUpn;
+    BehaviorEntities
+    | where Timestamp >ago(Lookback)
+    | where EntityType == @"User"
+    | where TimeGenerated >ago(Lookback)
+    | where AccountUpn contains (UserPrincipalName)
+    | project-away Application, RemoteIP, ApplicationId
+    | join kind = inner (
+        BehaviorInfo
+        | where Timestamp >ago(Lookback)
+        | project BehaviorId, Description, AttackTechniques, BehaviorStartTime = StartTime, BehaviorEndTime = EndTime
+    ) on BehaviorId
+    | join kind = leftouter (
+        BehaviorEntities
+        | where Timestamp >ago(Lookback)
+        | where EntityType == @"Ip"
+        | project BehaviorId, IPAddress = RemoteIP
+    ) on BehaviorId
+    | where IPAddress in~ (AccountIpAddress) or AccountIpAddress contains ""
+    | join kind = leftouter (
+        BehaviorEntities
+        | where Timestamp >ago(Lookback)
+        | where EntityType == @"CloudApplication"
+        | project BehaviorId, Application, ApplicationId
+    ) on BehaviorId
+    | join kind = leftouter (
+        IdentityLogonEvents
+        | where Timestamp >ago(Lookback)
+        | project AccountUpn, Application, IPAddress, SignInActivityTime = Timestamp, SignInActionType = ActionType, SignInType = LogonType, SignInReportId = ReportId, SignInRequestId = tostring(parse_json(AdditionalFields)["Request ID"])
+    ) on AccountUpn, Application, IPAddress
+    | where SignInRequestId contains (RequestId)
+    | extend MatchedSignInRequestId = iff(((BehaviorStartTime - SignInActivityTime) between (0min .. 1h) or (BehaviorEndTime - SignInActivityTime) between (0min .. 1h)), SignInRequestId, "")
+    | project-away BehaviorId1, BehaviorId2, BehaviorId3, AccountUpn1, Application1, IPAddress1
+    | summarize Categories = make_set(Categories), Applications = make_set(Application), IPAddresses = make_set(IPAddress), SignInRequestIds = make_set_if(MatchedSignInRequestId, isnotempty(MatchedSignInRequestId)) by Timestamp, BehaviorStartTime, BehaviorEndTime, BehaviorId, ActionType, ServiceSource, DetectionSource, EntityRole, EntityType, AccountObjectId, AccountUpn, Description, AttackTechniques
+};
+XdrBehaviorsEnrichedSignIns(AccountUpn="", AccountIpAddress="", RequestId="")
