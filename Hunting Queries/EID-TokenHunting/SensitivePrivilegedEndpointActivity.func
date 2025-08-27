@@ -96,7 +96,23 @@ let SensitivePrivilegedInterfaceActivity = (Entity:string="", CaPolicyBlockedOut
         ) on OperationId
         | extend TargetAadObjectIds = bag_pack_columns(ActivityTargetAadObjectIds, RequestTargetAadObjectId)
         | extend IsSensitiveTarget = iff(TargetAadObjectIds has_any (XspmCriticalAadObjectIds), "true", "false")
-        | extend IsSensitiveAction = iff((NormalizedRequestUri has_any(PrivilegedGraphOperationsUri) and NormalizedRequestUri !in (PrivilegedGraphOperationsExcluded) and RequestMethod in~ (PrivilegedGraphOperations)) == true, "true", "false")
+        | extend IsSensitiveAction = iff(
+            (
+                NormalizedRequestUri has_any(PrivilegedGraphOperationsUri)
+                and NormalizedRequestUri !in (PrivilegedGraphOperationsExcluded)
+                and RequestMethod in~ (PrivilegedGraphOperations)
+                and not (
+                    RequestMethod == "POST"
+                    and (
+                        RequestUri endswith "checkAccess"
+                        or RequestUri contains "/get"
+                        or RequestUri contains "/checkMember"
+                        or RequestUri contains "/microsoft.graph.check"
+                        or RequestUri contains "/microsoft.graph.getMember"
+                    )
+                )
+            ) == true, "true",
+            "false")
         | extend GraphOperations = bag_pack_columns(ActivityTime = TimeGenerated, RequestId, OperationId, ClientRequestId, UserAgent, RequestUri, ActivityTargetAadObjectIds, ResponseSizeBytes, UserAgent, IsSensitiveAction, IsSensitiveTarget, UncommonForUser)
         | summarize Operations = make_set(GraphOperations) by ActivityIpAddress = IPAddress, tostring(TokenIssuedAt), UniqueTokenIdentifier = SignInActivityId, IsSensitiveAction, IsSensitiveTarget
     ) on UniqueTokenIdentifier
