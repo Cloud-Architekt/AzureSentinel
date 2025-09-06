@@ -1,0 +1,42 @@
+// Token Verdicts with Unique Token Identifiers
+// Correlation of token request-related XDR alert to other sign-in events and their issued token (identifiers)
+
+let TokenVerdicts = (AccountUpn:string, AlertId:string="", Looback:timespan=90d, AllTokensFromRiskySession:bool=false) {
+  let AffectedTokenByRequests = SecurityAlert
+        | where TimeGenerated >ago(Looback)
+        | where SystemAlertId contains (AlertId) or AlertId == ""
+        // Get alerts with entity Cloud-Logon-Requests only
+        | where Entities !contains 'cloud-logon-session'
+        | mv-expand parse_json(Entities)
+        | where Entities.Type startswith 'cloud-logon-request'
+        | mv-expand parse_json(tostring(Entities.ThreatAnalysisSummary))
+        | extend RequestId = tostring(Entities.RequestId)
+        | join kind=inner (
+            union SigninLogs, AADNonInteractiveUserSignInLogs
+            | where TimeGenerated >ago(Looback)            
+            | where UserPrincipalName contains (AccountUpn)
+            | distinct SessionId, RequestId = OriginalRequestId, UniqueTokenIdentifier
+        ) on RequestId
+    | summarize arg_max(TimeGenerated, *), ThreatVerdicts = make_set(Entities_ThreatAnalysisSummary.Verdict), ThreatAnalysisSummary = make_set(Entities_ThreatAnalysisSummary) by SystemAlertId, UniqueTokenIdentifier;
+  let AffectedTokenBySessionId = SecurityAlert
+    | where (AllTokensFromRiskySession) == true
+    | where TimeGenerated >ago(Looback)  
+    | where SystemAlertId contains (AlertId) or AlertId == ""
+    // Get entities with SessionId
+    | mv-expand parse_json(Entities)
+    | where Entities.Type == 'cloud-logon-session'
+    | mv-expand parse_json(tostring(Entities.ThreatAnalysisSummary))
+    | extend SessionId = coalesce(tostring(Entities.SessionId), tostring(parse_json(tostring(Entities))["SessionId"]))
+    | join kind=inner (
+        union SigninLogs, AADNonInteractiveUserSignInLogs
+        | where TimeGenerated >ago(Looback)            
+        | where UserPrincipalName contains (AccountUpn)
+        | distinct SessionId, RequestId = OriginalRequestId, UniqueTokenIdentifier
+    ) on SessionId
+    | summarize arg_max(TimeGenerated, *), ThreatVerdicts = make_set(Entities_ThreatAnalysisSummary.Verdict), ThreatAnalysisSummary = make_set(Entities_ThreatAnalysisSummary)by SystemAlertId, UniqueTokenIdentifier;
+    let AffectedTokens = union AffectedTokenByRequests, AffectedTokenBySessionId
+    | where isnotempty(UniqueTokenIdentifier)
+    | project-reorder TimeGenerated, UniqueTokenIdentifier, ThreatVerdicts, AlertName, AlertSeverity, StartTime, EndTime, SessionId;
+  AffectedTokens
+};
+TokenVerdicts(AccountUpn="", AllTokensFromRiskySession=false)

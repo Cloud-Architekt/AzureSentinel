@@ -71,19 +71,11 @@ let MicrosoftCloudActivity = (AccountObjectId:string, DeviceId:string, Lookback:
     | where AccountObjectId == (ActorAccountObjectId) or ActorAccountObjectId == ""
     // Session and DeviceId is not available in GraphAPIAuditEvents, no support for filtering data on the parameter at this time of the query
     | extend RawEventData = pack_all()
+    | extend IsViewPost = RequestMethod == "POST" and (RequestUri has_any("checkAccess", "/get", "/checkMember", "/directory/estimateAccess", "/microsoft.graph.check", "/microsoft.graph.getMember", "/microsoft.graph.getMemberGroups") or RequestUri contains "/get")
     | extend ActivityType = case(
-        RequestMethod == "GET", "View",
-        RequestMethod == "PATCH", "Edit",
-        RequestMethod == "PUT", "Edit",
-        RequestMethod == "POST"
-        and (
-            RequestUri endswith "checkAccess"
-            or RequestUri contains "/get"
-            or RequestUri contains "/checkMember"
-            or RequestUri contains "/directory/estimateAccess"
-            or RequestUri contains "/microsoft.graph.check"
-            or RequestUri contains "/microsoft.graph.getMember"
-        ), "View",
+        RequestMethod in ("GET"), "View",
+        RequestMethod in ("PATCH", "PUT"), "Edit",
+        IsViewPost, "View",
         RequestMethod == "POST" and RequestUri !endswith "$batch", "Edit",
         RequestMethod == "DELETE", "Delete",
         "Basic"
