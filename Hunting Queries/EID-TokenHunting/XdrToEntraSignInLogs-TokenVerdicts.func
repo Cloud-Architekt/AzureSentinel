@@ -1,7 +1,7 @@
 // Token Verdicts with Unique Token Identifiers
 // Correlation of token request-related XDR alert to other sign-in events and their issued token (identifiers)
 
-let TokenVerdicts = (AccountUpn:string, AlertId:string="", Looback:timespan=90d, AllTokensFromRiskySession:bool=false) {
+let TokenVerdicts = (AccountUpn:string, AlertId:string="", Looback:timespan=30d, AllTokensFromRiskySession:bool=false) {
   let AffectedTokenByRequests = SecurityAlert
         | where TimeGenerated >ago(Looback)
         | where SystemAlertId contains (AlertId) or AlertId == ""
@@ -36,7 +36,9 @@ let TokenVerdicts = (AccountUpn:string, AlertId:string="", Looback:timespan=90d,
     | summarize arg_max(TimeGenerated, *), ThreatVerdicts = make_set(Entities_ThreatAnalysisSummary.Verdict), ThreatAnalysisSummary = make_set(Entities_ThreatAnalysisSummary)by SystemAlertId, UniqueTokenIdentifier;
     let AffectedTokens = union AffectedTokenByRequests, AffectedTokenBySessionId
     | where isnotempty(UniqueTokenIdentifier)
-    | project-reorder TimeGenerated, UniqueTokenIdentifier, ThreatVerdicts, AlertName, AlertSeverity, StartTime, EndTime, SessionId;
+    | extend Alert = bag_pack_columns(AlertName, AlertSeverity, StartTime, EndTime, SystemAlertId)
+    | summarize Alert = make_set(Alert), ThreatVerdicts = make_set(ThreatVerdicts), ThreatAnalysisSummary = make_set(ThreatAnalysisSummary), Entities = make_set(Entities) by UniqueTokenIdentifier, SessionId
+    | project-reorder UniqueTokenIdentifier, Alert, SessionId, ThreatVerdicts, ThreatAnalysisSummary, Entities;
   AffectedTokens
 };
 TokenVerdicts(AccountUpn="", AllTokensFromRiskySession=false)

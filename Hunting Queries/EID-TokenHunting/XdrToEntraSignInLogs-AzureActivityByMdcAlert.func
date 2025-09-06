@@ -57,7 +57,7 @@ let AzureActivityByMdcAlert = (UserPrincipalName:string, IpAddress:string="", Un
     | summarize ArmAction = make_set(Action) by AlertTimestamp, AlertId, AlertTitle = Title, Categories, AttackTechniques, ServiceSource, DetectionSource, CallerObjectId, CallerIpAddress, UniqueTokenIdentifier, SessionId, AlertResourceEntity
     | where UniqueTokenIdentifier contains (UniqueTokenIdentifier)
 };
-let TokensFromRiskySessions = SessionVerdicts | mv-expand UniqueTokenIdentifier | project AlertName, tostring(UniqueTokenIdentifier);
+let TokensFromRiskySessions = SessionVerdicts | mv-expand UniqueTokenIdentifier | project Alert, tostring(UniqueTokenIdentifier);
 AzureActivityByMdcAlert(UserPrincipalName="")
 // Correlation if token is part of risky session
 | join kind=inner ( TokensFromRiskySessions ) on UniqueTokenIdentifier

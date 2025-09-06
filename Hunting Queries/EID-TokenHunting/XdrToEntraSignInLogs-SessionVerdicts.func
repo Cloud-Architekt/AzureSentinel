@@ -1,7 +1,7 @@
 // Session Verdicts with Unique Token Identifiers
 // Correlation of session-related XDR alert to other sign-in events and their issued token (identifiers)
 
-let SessionVerdicts = (AccountUpn:string, AlertId:string="", Looback:timespan=90d) {
+let SessionVerdicts = (AccountUpn:string, AlertId:string="", Looback:timespan=30d) {
   let AffectedSessionByRequests = SecurityAlert
         | where TimeGenerated >ago(Looback)
         | where SystemAlertId contains (AlertId) or AlertId == ""
@@ -40,7 +40,9 @@ let SessionVerdicts = (AccountUpn:string, AlertId:string="", Looback:timespan=90
     | where UserPrincipalName contains (AccountUpn)
     | project-rename AccountUpn = UserPrincipalName
     | project-away SessionId1
-    | project-reorder TimeGenerated, SessionId, ThreatVerdicts, AlertName, AlertSeverity, StartTime, EndTime, UniqueTokenIdentifier;
+    | extend Alert = bag_pack_columns(AlertName, AlertSeverity, StartTime, EndTime, SystemAlertId)
+    | summarize Alert = make_set(Alert), UniqueTokenIdentifier = make_set(UniqueTokenIdentifier), ThreatVerdicts = make_set(ThreatVerdicts), ThreatAnalysisSummary = make_set(ThreatAnalysisSummary), Entities = make_set(Entities) by SessionId
+    | project-reorder SessionId, Alert, UniqueTokenIdentifier, ThreatVerdicts, ThreatAnalysisSummary, Entities;
   AffectedSessions
 };
 SessionVerdicts(AccountUpn="")
