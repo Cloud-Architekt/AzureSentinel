@@ -1,0 +1,30 @@
+let UebaEnrichedAllSignIns = (AccountUpn:string, Lookback:timespan=1d, UserSessionId:string, UniqueTokenId:string) {
+    let FilteredAccountUpn = AccountUpn;
+    let Identity = IdentityInfo
+    | where TimeGenerated > ago(14d)
+    | where AccountUpn =~ (FilteredAccountUpn) or (FilteredAccountUpn) == ""
+    | summarize arg_max(TimeGenerated, *) by AccountObjectId
+    | project AccountUpn, AccountObjectId, AccountName, OnPremSid;
+    BehaviorAnalytics
+    | where TimeGenerated >ago(Lookback)
+    | where ActivityType contains "Logon"
+    | extend AccountObjectId = tostring(parse_json(UsersInsights)["AccountObjectID"])
+    | extend UserId = tostring(parse_json(UsersInsights)["UserId"])
+    | extend OnPremSid = tostring(parse_json(UsersInsights)["OnPremisesSID"])
+    | where UserPrincipalName in~ (Identity) or AccountObjectId in~ (Identity) or UserId in~ (Identity) or OnPremSid in~ (Identity) or UserName in~ (Identity)
+    | extend IPAddress = SourceIPAddress
+    | where isnotempty(UserPrincipalName) and isnotempty(ActivityInsights.App) and isnotempty(ActivityInsights.Resource)
+    | extend AppDisplayName = tostring(ActivityInsights.App), ResourceDisplayName = tostring(ActivityInsights.Resource)
+    | join kind=inner (
+        union AADNonInteractiveUserSignInLogs, SigninLogs
+        | where TimeGenerated >ago(Lookback)
+        | where SessionId contains (UserSessionId) and UniqueTokenIdentifier contains (UniqueTokenId)
+        | where CreatedDateTime >ago(Lookback) and UserPrincipalName contains (AccountUpn)
+    ) on UserPrincipalName, IPAddress, AppDisplayName, ResourceDisplayName
+    | project-rename SignInTime = CreatedDateTime, BehaviorActivityTime = TimeGenerated
+    | where (BehaviorActivityTime - SignInTime) between (0min .. 1h)
+    | project-reorder SessionId, BehaviorActivityTime, SignInTime
+    | extend SignInDetail = bag_pack_columns(SignInTime, AppDisplayName, ResourceDisplayName, RiskLevel, RiskLevelDuringSignIn, SessionId, OriginalRequestId, UniqueTokenIdentifier)
+    | summarize SignInDetails = make_set(SignInDetail), UsersInsights = make_set(UsersInsights), DevicesInsights = make_set(DevicesInsights), ActivityInsights = make_set(ActivityInsights) by BehaviorActivityTime, ActivityType, ActionType, InvestigationPriority, UserPrincipalName, SourceIPAddress
+};
+UebaEnrichedAllSignIns(AccountUpn="katie.summer@c4a8korriban.com", UserSessionId="", UniqueTokenId="")
