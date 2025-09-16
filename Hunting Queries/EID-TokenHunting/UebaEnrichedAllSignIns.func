@@ -27,4 +27,4 @@ let UebaEnrichedAllSignIns = (AccountUpn:string, Lookback:timespan=1d, UserSessi
     | extend SignInDetail = bag_pack_columns(SignInTime, AppDisplayName, ResourceDisplayName, RiskLevel, RiskLevelDuringSignIn, SessionId, OriginalRequestId, UniqueTokenIdentifier)
     | summarize SignInDetails = make_set(SignInDetail), UsersInsights = make_set(UsersInsights), DevicesInsights = make_set(DevicesInsights), ActivityInsights = make_set(ActivityInsights) by BehaviorActivityTime, ActivityType, ActionType, InvestigationPriority, UserPrincipalName, SourceIPAddress
 };
-UebaEnrichedAllSignIns(AccountUpn="katie.summer@c4a8korriban.com", UserSessionId="", UniqueTokenId="")
+UebaEnrichedAllSignIns(AccountUpn="", UserSessionId="", UniqueTokenId="")
