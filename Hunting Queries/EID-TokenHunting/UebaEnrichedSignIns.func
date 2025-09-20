@@ -4,16 +4,18 @@ let UebaEnrichedSignIns = (AccountUpn:string, Lookback:timespan=1d, UserSessionI
     | where EventSource == "Azure AD"
     | extend IPAddress = SourceIPAddress
     | where isnotempty(UserPrincipalName) and isnotempty(ActivityInsights.App) and isnotempty(ActivityInsights.Resource)
-    | extend AppDisplayName = tostring(ActivityInsights.App), ResourceDisplayName = tostring(ActivityInsights.Resource)
+    | extend AppDisplayName = tostring(ActivityInsights.App), ResourceDisplayName = tostring(ActivityInsights.Resource), DeviceName = tolower(SourceDevice)
     | join kind=inner (
         union AADNonInteractiveUserSignInLogs, SigninLogs
         | where SessionId contains (UserSessionId) and UniqueTokenIdentifier contains (UniqueTokenId)
         | where CreatedDateTime >ago(Lookback) and UserPrincipalName contains (AccountUpn)
-    ) on UserPrincipalName, IPAddress, AppDisplayName, ResourceDisplayName
+        | extend DeviceDetail = iff(isempty( DeviceDetail_dynamic ), todynamic(DeviceDetail_string), DeviceDetail_dynamic)
+        | extend DeviceName = tostring(tolower(DeviceDetail.displayName))
+    ) on UserPrincipalName, IPAddress, AppDisplayName, ResourceDisplayName, DeviceName
     | project-rename SignInTime = CreatedDateTime, BehaviorActivityTime = TimeGenerated
     | where (BehaviorActivityTime - SignInTime) between (0min .. 1h)
     | project-reorder SessionId, BehaviorActivityTime, SignInTime
     | extend SignInDetail = bag_pack_columns(SignInTime, AppDisplayName, ResourceDisplayName, RiskLevel, RiskLevelDuringSignIn, SessionId, OriginalRequestId, UniqueTokenIdentifier)
-    | summarize SignInDetails = make_set(SignInDetail), UsersInsights = make_set(UsersInsights), DevicesInsights = make_set(DevicesInsights), ActivityInsights = make_set(ActivityInsights) by BehaviorActivityTime, ActivityType, ActionType, InvestigationPriority, UserPrincipalName, SourceIPAddress
+    | summarize SignInDetails =  array_sort_asc(make_set(SignInDetail)), UsersInsights = make_set(UsersInsights), DevicesInsights = make_set(DevicesInsights), ActivityInsights = make_set(ActivityInsights) by BehaviorActivityTime, ActivityType, ActionType, InvestigationPriority, UserPrincipalName, SourceIPAddress
 };
 UebaEnrichedSignIns(AccountUpn="", UserSessionId="", UniqueTokenId="")
