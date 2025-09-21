@@ -22,17 +22,29 @@ relevantTechniques:
   - T1078
   - T1528
 query: |
-  let AADCServer = (_GetWatchlist('HighValueAssets')
-    | where (['Tags'] has "Azure AD Connect") or (['Tags'] has "Entra Connect") | project ['IP Address']);
-  let AADConnectorAcc = (_GetWatchlist('ServiceAccounts')
-    | where (['Tags'] has "Azure AD Connect") or (['Tags'] has "Entra Connect") | project AccountObjectId = ['Service AAD Object Id']);
+  let AADCServer = _GetWatchlist('HighValueAssets')
+    | where Tags has_any ("Azure AD Connect", "Entra Connect")
+    | mv-expand IP = parse_json(['IP Address'])
+    | extend IPString = tostring(IP)
+    | extend IsCIDR = iif(IPString contains "/", 1, 0);
+  let AADC_IPs = AADCServer
+    | where IsCIDR == 0
+    | distinct IPString;
+  let AADC_CIDRs = AADCServer
+    | where IsCIDR == 1
+    | summarize CIDRList = make_list(IPString);
+  let AADConnectorAcc = _GetWatchlist('ServiceAccounts')
+    | where Tags has_any ("Azure AD Connect", "Entra Connect")
+    | project AccountObjectId = ['Service AAD Object Id'];
   union isfuzzy=true AADNonInteractiveUserSignInLogs, SigninLogs
   | where ingestion_time() > ago(40m)
   // AADC APIs: AADSync = "cb1056e2-e479-49de-ae31-7812af012ed8", AAD Connect v2 = 6eb59a73-39b2-4c23-a70f-e2e3ce8965b1
-  | where (UserId in (AADConnectorAcc) or AppId == "cb1056e2-e479-49de-ae31-7812af012ed8" or AppId == "6eb59a73-39b2-4c23-a70f-e2e3ce8965b1") and IPAddress !in (AADCServer)
+  | where UserId in (AADConnectorAcc) or AppId in ("cb1056e2-e479-49de-ae31-7812af012ed8", "6eb59a73-39b2-4c23-a70f-e2e3ce8965b1")
+  | where not(IPAddress in (AADC_IPs) or ipv4_is_in_any_range(IPAddress, toscalar(AADC_CIDRs)))
   | where ResultType == "0"
-  | project TimeGenerated,Category,UserPrincipalName, AppDisplayName, AppId, IPAddress, RiskState
+  | project TimeGenerated, Category, UserPrincipalName, AppDisplayName, AppId, IPAddress, RiskState
   | extend timestamp = TimeGenerated, IPCustomEntity = IPAddress, AccountCustomEntity = UserPrincipalName
+  | distinct IPAddress
 entityMappings:
   - entityType: Account
     fieldMappings:
@@ -42,5 +54,5 @@ entityMappings:
     fieldMappings:
       - identifier: Address
         columnName: IPCustomEntity
-version: 1.0.4
+version: 1.1.0
 kind: Scheduled
