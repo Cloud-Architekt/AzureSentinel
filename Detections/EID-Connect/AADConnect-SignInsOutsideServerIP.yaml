@@ -23,8 +23,10 @@ relevantTechniques:
   - T1528
 query: |
   let AADCServer = _GetWatchlist('HighValueAssets')
+    | extend Tags = column_ifexists("Tags","")
     | where Tags has_any ("Azure AD Connect", "Entra Connect")
-    | mv-expand IP = parse_json(['IP Address'])
+    | extend ['IP Address'] = column_ifexists("IP Address","")
+    | mv-expand IP = parse_json(['IP Address']) to typeof(string)
     | extend IPString = tostring(IP)
     | extend IsCIDR = iif(IPString contains "/", 1, 0);
   let AADC_IPs = AADCServer
@@ -44,7 +46,6 @@ query: |
   | where ResultType == "0"
   | project TimeGenerated, Category, UserPrincipalName, AppDisplayName, AppId, IPAddress, RiskState
   | extend timestamp = TimeGenerated, IPCustomEntity = IPAddress, AccountCustomEntity = UserPrincipalName
-  | distinct IPAddress
 entityMappings:
   - entityType: Account
     fieldMappings:
