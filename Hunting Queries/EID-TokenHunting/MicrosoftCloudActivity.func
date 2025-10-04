@@ -158,11 +158,10 @@ let MicrosoftCloudActivity = (AccountObjectId:string, DeviceId:string, Lookback:
     // Correlation with sign-in events in Microsoft Entra
     | join kind=leftouter (
         union SigninLogs, AADNonInteractiveUserSignInLogs
-            | where TimeGenerated >ago(SigninLookback)
-            | where ResultType == "0"
+            | where TimeGenerated >ago(SigninLookback) and ResultType == "0"
+            | where UserId == (ActorAccountObjectId) or ActorAccountObjectId == ""            
             | extend AccessType = iff(ClientCredentialType in~ (DelegatedCredentialTypes), "Application", "User")
             | extend DeviceDetail = iff(isempty( DeviceDetail_dynamic ), todynamic(DeviceDetail_string), DeviceDetail_dynamic)
-            | where UserId == (ActorAccountObjectId) or ActorAccountObjectId == ""
             | extend AuthProcessDetails = replace_string(AuthenticationProcessingDetails, " ", "")
             | extend AuthProcessDetails = replace_string(AuthProcessDetails, "\r\n", "")
             | parse-where AuthProcessDetails with * "IsCAEToken\",\"value\":\"" IsTokenCAE"\"" *
@@ -184,8 +183,11 @@ let MicrosoftCloudActivity = (AccountObjectId:string, DeviceId:string, Lookback:
     // DeviceId is not available in GraphAPIAuditEvents and partly not available for some events in CloudAppEvents, fallback to use SessionId from SigninLogs
     | extend DeviceId = coalesce(DeviceId, SigninDeviceId)
     | where DeviceId == (ActorDeviceId) or ActorDeviceId == ""
-    | join kind=leftouter (
+    | lookup (
             NetworkAccessTraffic
+            | where TimeGenerated > ago(Lookback)
+            | where isnotempty(UniqueTokenId)
+            | where isempty(ActorAccountObjectId) or UserId == ActorAccountObjectId
             | project AccountObjectId = UserId, DeviceId, UniqueTokenId, SourceIp, InitiatingProcessName, ConnectionId, TransactionId, AgentVersion
     ) on AccountObjectId, DeviceId, UniqueTokenId
     // Same IP address in activity and sign-in logs, should be set to true if activity was made outside of GSA but IP address matches with restored IP address from Entra sign-in
