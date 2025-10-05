@@ -147,7 +147,7 @@ let MicrosoftCloudActivity = (AccountObjectId:string, DeviceId:string, Lookback:
         | distinct UserId, IPAddress, SessionId
         | join kind=inner (
             CloudAppEvents
-            | where ActionType == @"SSO Logon"
+            | where ActionType == @"SSO Logon" and TimeGenerated >ago(Lookback)
             | project Timestamp, UserId = AccountObjectId, ActionType, Application, IPAddress, MdaSessionData = SessionData
             | extend MdaSessionProxyId = tostring(parse_json(MdaSessionData)["InLineSessionId"])
         ) on UserId, IPAddress
