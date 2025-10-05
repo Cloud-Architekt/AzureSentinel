@@ -162,6 +162,8 @@ let MicrosoftCloudActivity = (AccountObjectId:string, DeviceId:string, Lookback:
             | where UserId == (ActorAccountObjectId) or ActorAccountObjectId == ""            
             | extend AccessType = iff(ClientCredentialType in~ (DelegatedCredentialTypes), "Application", "User")
             | extend DeviceDetail = iff(isempty( DeviceDetail_dynamic ), todynamic(DeviceDetail_string), DeviceDetail_dynamic)
+            | extend TokenProtectionStatus = iff(isempty( TokenProtectionStatusDetails_dynamic ), todynamic(TokenProtectionStatusDetails_string), TokenProtectionStatusDetails_dynamic)
+            | extend TokenProtection = TokenProtectionStatus.signInSessionStatus, SignInSessionStatusCode = TokenProtectionStatus.signInSessionStatus
             | extend AuthProcessDetails = replace_string(AuthenticationProcessingDetails, " ", "")
             | extend AuthProcessDetails = replace_string(AuthProcessDetails, "\r\n", "")
             | parse-where AuthProcessDetails with * "IsCAEToken\",\"value\":\"" IsTokenCAE"\"" *
@@ -174,6 +176,7 @@ let MicrosoftCloudActivity = (AccountObjectId:string, DeviceId:string, Lookback:
                 GlobalSecureAccessIpAddress,
                 SigninIpAddress = IPAddress,
                 SigninSessionId = SessionId,
+                TokenProtection,
                 UniqueTokenId = UniqueTokenIdentifier,
                 IsTokenCAE
     ) on UniqueTokenId
@@ -189,7 +192,7 @@ let MicrosoftCloudActivity = (AccountObjectId:string, DeviceId:string, Lookback:
             | where isnotempty(UniqueTokenId)
             | where isempty(ActorAccountObjectId) or UserId == ActorAccountObjectId
             | project AccountObjectId = UserId, DeviceId, UniqueTokenId, SourceIp, InitiatingProcessName, ConnectionId, TransactionId, AgentVersion
-    ) on AccountObjectId, DeviceId, UniqueTokenId
+    ) on UniqueTokenId
     // Same IP address in activity and sign-in logs, should be set to true if activity was made outside of GSA but IP address matches with restored IP address from Entra sign-in
     // Potential F/P by Microsoft back-end activity which uses token for delegation
     | extend ActivityIpAddressMatchesWithSignin = case(
@@ -214,11 +217,17 @@ let MicrosoftCloudActivity = (AccountObjectId:string, DeviceId:string, Lookback:
         IPAddress
     )
     | join kind=leftouter ( MdaSessionProxyEvents ) on AccountObjectId, Application, SessionId
-    | extend IsMdaSessionProxySession = iff(isnotempty(MdaSessionProxyIds), true, false)    
+    | extend IsMdaSessionProxySession = iff(isnotempty(MdaSessionProxyIds), true, false)
+    | extend GlobalSecureAccess = bag_pack_columns(SourceIp, ConnectionId, TransactionId, InitiatingProcessName, AgentVersion)
+    | extend Authentication = bag_pack_columns(IsTokenCAE, AuthType, AccessType, TokenProtection)
+    | extend IpAddresses = bag_pack_columns(ActivityIpAddress = RestoredOriginalIpAddress, GlobalSecureAccessIpAddress, SigninIpAddress)
+    | project Timestamp, AccountObjectId, DeviceId, SignInTime, SessionId, UniqueTokenId, Workload, ReportId, ActivityType, ActivityObjects, ObjectType, ObjectId, IPAddress, IPTags, ActivityIpAddressMatchesWithSignin, ActivityIpAddressFromGsa, IsThroughGlobalSecureAccess, IsMdaSessionProxySession, Authentication, IpAddresses, MdaSessionProxyIds, GlobalSecureAccess, RawEventData, LastSeenForUser, UncommonForUser
+    | sort by Timestamp
 };
-MicrosoftCloudActivity(AccountObjectId="", DeviceId="", Lookback=4h, SessionId="", UniqueTokenId="", Workload="")
-| extend GlobalSecureAccess = bag_pack_columns(SourceIp, ConnectionId, TransactionId, InitiatingProcessName, AgentVersion)
-| extend Authentication = bag_pack_columns(IsTokenCAE, AuthType, AccessType)
-| extend IpAddresses = bag_pack_columns(ActivityIpAddress = RestoredOriginalIpAddress, GlobalSecureAccessIpAddress, SigninIpAddress)
-| project Timestamp, AccountObjectId, DeviceId, SignInTime, SessionId, UniqueTokenId, Workload, ReportId, ActivityType, ActivityObjects, ObjectType, ObjectId, IPAddress, IPTags, ActivityIpAddressMatchesWithSignin, ActivityIpAddressFromGsa, IsThroughGlobalSecureAccess, IsMdaSessionProxySession, Authentication, IpAddresses, MdaSessionProxyIds, GlobalSecureAccess, RawEventData, LastSeenForUser, UncommonForUser
-| sort by Timestamp
+MicrosoftCloudActivity(
+    AccountObjectId="",
+    DeviceId="",
+    Lookback=4h,
+    SessionId="",
+    UniqueTokenId="",
+    Workload="")
