@@ -221,7 +221,8 @@ let MicrosoftCloudActivity = (AccountObjectId:string, DeviceId:string, Lookback:
     | extend GlobalSecureAccess = bag_pack_columns(SourceIp, ConnectionId, TransactionId, InitiatingProcessName, AgentVersion)
     | extend Authentication = bag_pack_columns(IsTokenCAE, AuthType, AccessType, TokenProtection)
     | extend IpAddresses = bag_pack_columns(ActivityIpAddress = RestoredOriginalIpAddress, GlobalSecureAccessIpAddress, SigninIpAddress)
-    | project Timestamp, AccountObjectId, DeviceId, SignInTime, SessionId, UniqueTokenId, Workload, ReportId, ActivityType, ActivityObjects, ObjectType, ObjectId, IPAddress, IPTags, ActivityIpAddressMatchesWithSignin, ActivityIpAddressFromGsa, IsThroughGlobalSecureAccess, IsMdaSessionProxySession, Authentication, IpAddresses, MdaSessionProxyIds, GlobalSecureAccess, RawEventData, LastSeenForUser, UncommonForUser
+    | extend CorrelatedSignInEvent = iff(isnotempty(SignInTime), true, false)
+    | project Timestamp, AccountObjectId, CorrelatedSignInEvent, SignInTime, SessionId, UniqueTokenId, DeviceId, Workload, ReportId, ActivityType, ActivityObjects, ObjectType, ObjectId, IPAddress, IPTags, ActivityIpAddressMatchesWithSignin, ActivityIpAddressFromGsa, IsThroughGlobalSecureAccess, IsMdaSessionProxySession, Authentication, IpAddresses, MdaSessionProxyIds, GlobalSecureAccess, RawEventData, LastSeenForUser, UncommonForUser
     | sort by Timestamp
 };
 MicrosoftCloudActivity(
