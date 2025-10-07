@@ -1,0 +1,234 @@
+// Using CloudAppEvents for unified schema between Azure and M365
+// Side Note: OfficeActivity also supports for linkable identifiers and AzureActivity offers also UniqueTokenId for correlation
+let MicrosoftCloudActivity = (AccountObjectId:string, DeviceId:string, Lookback:timespan=1d, SessionId:string, UniqueTokenId:string, Workload:dynamic) {
+    let DelegatedCredentialTypes = dynamic(['clientAssertion', 'clientSecret', 'federatedIdentityCredential']);
+    let KnownGsaIpRanges = dynamic(['128.94.0.0/19', '151.206.0.0/16']);
+    // Set parameters to variables
+    let ActorAccountObjectId = AccountObjectId;
+    let ActorDeviceId = DeviceId;    
+    let ActorSessionId = SessionId;
+    let ActorUniqueId = UniqueTokenId;
+    let FilteredWorkload = Workload;
+    // Add another 24h for lookup to the sign-in logs to find sign-in activities from CAE token
+    let SigninLookback = iff(isempty(Lookback), 90d, Lookback +90d);
+    // Collecting Events from Microsoft Azure App Connector
+    let AzureEvents = CloudAppEvents
+    | extend Workload = "Azure"
+    | where Workload == FilteredWorkload or FilteredWorkload == ""
+    | where AppInstanceId == "0" and Application == "Microsoft Azure"
+    | where Timestamp >ago(Lookback)
+    | where AccountObjectId == (ActorAccountObjectId) or ActorAccountObjectId == ""
+    | extend TokenClaims = parse_json(RawEventData)["claims"]
+    | extend SessionId =  tostring(parse_json(tostring(TokenClaims))["sid"])
+    | where SessionId == (ActorSessionId) or ActorSessionId == ""
+    | extend UniqueTokenId = tostring(parse_json(tostring(TokenClaims))["uti"])
+    | where UniqueTokenId == (ActorUniqueId) or ActorUniqueId == ""
+    | extend DeviceId = tostring(parse_json(tostring(TokenClaims))["http://schemas.microsoft.com/2012/01/devicecontext/claims/identifier"])
+    | where DeviceId == (ActorDeviceId) or ActorDeviceId == ""
+    | extend TokenIssuedAt = tostring(unixtime_seconds_todatetime(toint(parse_json(tostring(TokenClaims))["iat"])))
+    | extend AppId =  tostring(parse_json(tostring(TokenClaims))["appid"])
+    | extend Audience = tostring(parse_json(tostring(TokenClaims))["aud"])
+    | extend ResourceId = case(
+        (Audience contains "https://management.core.windows.net" or Audience contains "https://management.azure.com"), "797f4846-ba00-4fd7-ba43-dac1f8f63013",
+        ""
+    )
+    | extend HttpRequest = parse_json(RawEventData)["httpRequest"]
+    | extend RestoredOriginalIpAddress = tostring(IPAddress)
+    | extend IPAddress = tostring(parse_json(tostring(HttpRequest))["clientIpAddress"])
+    | extend AuthType = ""
+    | where isnotempty(UniqueTokenId)
+    | project Timestamp, AccountObjectId, DeviceId, AccountType, IsAdminOperation, Workload, Application, ApplicationId, ActivityType, ActivityObjects, ObjectType, ObjectId, OAuthAppId, AuthType, AuditSource, ReportId, IsImpersonated, UniqueTokenId, SessionId, TokenIssuedAt, AppId, ResourceId, IPAddress, RestoredOriginalIpAddress, IPTags, UserAgent, UncommonForUser, LastSeenForUser, RawEventData;
+    // Collecting Events from Microsoft 365 App Connector
+    let M365Events = CloudAppEvents
+    | where tostring(parse_json(RawEventData)["Workload"]) == FilteredWorkload or FilteredWorkload == "" or FilteredWorkload == "M365"
+    | where AppInstanceId == "0" and Application != "Microsoft Azure"
+    | where Timestamp >ago(Lookback)
+    | extend AccountObjectId = iff(isempty(AccountObjectId), coalesce(tostring(parse_json(RawEventData)["AppAccessContext"]["UserObjectId"]), tostring(parse_json(RawEventData)["TokenObjectId"])), AccountObjectId)
+    | where AccountObjectId == (ActorAccountObjectId) or ActorAccountObjectId == ""
+    | extend AppContextSessionId = tostring(parse_json(RawEventData)["AppAccessContext"]["AADSessionId"])    
+    | extend SessionId = iff(isnotempty(AppContextSessionId), AppContextSessionId, tostring(parse_json(RawEventData)["SessionId"]))
+    | where SessionId == (ActorSessionId) or ActorSessionId == ""        
+    | extend UniqueTokenId = tostring(parse_json(RawEventData)["AppAccessContext"]["UniqueTokenId"])
+    | where UniqueTokenId == (ActorUniqueId) or ActorUniqueId == ""        
+    | extend DeviceId = coalesce(tostring(parse_json(RawEventData)["DeviceId"]), tostring(parse_json(RawEventData)["AppAccessContext"]["DeviceId"]))
+    | where DeviceId == (ActorDeviceId) or ActorDeviceId == ""
+    | extend TokenIssuedAt = tostring(parse_json(RawEventData)["AppAccessContext"]["IssuedAtTime"])
+    | extend AppId = tostring(coalesce(parse_json(RawEventData)["AppAccessContext"]["ClientAppId"], parse_json(RawEventData)["ClientAppId"]))
+    | extend ResourceId = tostring(parse_json(RawEventData)["AppAccessContext"]["APIId"])
+    | extend IPAddress = coalesce(tostring(parse_json(RawEventData)["ClientIP"]), tostring(parse_json(RawEventData)["ClientIPAddress"]))
+    // Some ClientIPAddress values contains port, remove port number from IPAddress
+    | extend IPAddress = iff(IPAddress matches regex @"^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}:\d+$", split(IPAddress, ":")[0], IPAddress)
+    // Restored IP Address is only available in OfficeActivity and limited to SharePoint (https://learn.microsoft.com/en-us/entra/global-secure-access/how-to-view-enriched-logs#how-to-view-the-logs)
+    | extend RestoredOriginalIpAddress = ""
+    | extend Workload = tostring(parse_json(RawEventData)["Workload"])
+    | extend AuthType = tostring(parse_json(RawEventData)["AuthenticationType"])
+    | project Timestamp, AccountObjectId, DeviceId, AccountType, IsAdminOperation, Workload, Application, ApplicationId, ActivityType, ActivityObjects, ObjectType, ObjectId, OAuthAppId, AuthType, AuditSource, ReportId, IsImpersonated, UniqueTokenId, SessionId, TokenIssuedAt, AppId, ResourceId, IPAddress, RestoredOriginalIpAddress, IPTags, UserAgent, UncommonForUser, LastSeenForUser, RawEventData;
+    // Collecting Microsoft Graph API Events from XDR Hunting table (GraphAPIAuditEvents) 
+    let MsGraphApiEvents = GraphAPIAuditEvents
+    | extend Workload = "Microsoft Graph API"
+    | where Workload == FilteredWorkload or FilteredWorkload == ""
+    | where Timestamp >ago(Lookback)
+    | where AccountObjectId == (ActorAccountObjectId) or ActorAccountObjectId == ""
+    // Session and DeviceId is not available in GraphAPIAuditEvents, no support for filtering data on the parameter at this time of the query
+    | extend RawEventData = pack_all()
+    | extend IsViewPost = RequestMethod == "POST" and (RequestUri has_any("checkAccess", "/get", "/checkMember", "/directory/estimateAccess", "/microsoft.graph.check", "/microsoft.graph.getMember", "/microsoft.graph.getMemberGroups") or RequestUri contains "/get")
+    | extend ActivityType = case(
+        RequestMethod in ("GET"), "View",
+        RequestMethod in ("PATCH", "PUT"), "Edit",
+        IsViewPost, "View",
+        RequestMethod == "POST" and RequestUri !endswith "$batch", "Edit",
+        RequestMethod == "DELETE", "Delete",
+        "Basic"
+    )
+    // Parsing Uri for Enrichment (by Fabian Bader: https://cloudbrothers.info/en/detect-threats-microsoft-graph-logs-part-1/)
+    | extend NormalizedRequestUri = replace_regex(RequestUri, @'[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}', @'<UUID>')
+    | extend NormalizedRequestUri = replace_regex(NormalizedRequestUri, @'\d+$', @'<UUID>')
+    | extend NormalizedRequestUri = replace_regex(NormalizedRequestUri, @'\/+', @'/')
+    | extend NormalizedRequestUri = replace_regex(NormalizedRequestUri, @'\/(v1\.0|beta)\/', @'/version/')
+    | extend NormalizedRequestUri = replace_regex(NormalizedRequestUri, @'%23EXT%23', @'')
+    | extend NormalizedRequestUri = replace_regex(NormalizedRequestUri, @'\/[a-zA-Z0-9+_.\-]+@[a-zA-Z0-9.]+\/', @'/<UUID>/')
+    | extend NormalizedRequestUri = replace_regex(NormalizedRequestUri, @'^\/<UUID>', @'')
+    | extend NormalizedRequestUri = replace_regex(NormalizedRequestUri, @'\?.*$', @'')
+    | extend NormalizedRequestUri = tostring(NormalizedRequestUri)
+    | extend ObjectType = case(
+        split(NormalizedRequestUri, "/")[2] == "<UUID>", split(NormalizedRequestUri, "/")[3],
+        split(NormalizedRequestUri, "/")[2] == "me" and split(NormalizedRequestUri, "/")[4] == "$value", split(NormalizedRequestUri, "/")[3],
+        split(NormalizedRequestUri, "/")[2] == "me", split(NormalizedRequestUri, "/")[4],
+        split(NormalizedRequestUri, "/")[3] == "<UUID>", split(NormalizedRequestUri, "/")[4],
+        split(NormalizedRequestUri, "/")[3] == "me", split(NormalizedRequestUri, "/")[4],
+        split(NormalizedRequestUri, "/")[3]
+    )
+    | extend ObjectType = tostring(ObjectType)
+    | extend ObjectId = case(
+        split(NormalizedRequestUri, "/")[3] == "drives", split(NormalizedRequestUri, "/")[4],
+        NormalizedRequestUri contains "/me/", AccountObjectId,
+        extract(@'([0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12})', 1, RequestUri)
+    )
+    | extend OAuthAppId = tostring(ApplicationId)
+    | extend AuditSource = "GraphAPIAuditEvents"
+    // GraphAPIAuditEvents includes restored IP address
+    | extend IPAddress = ""
+    | extend RestoredOriginalIpAddress = IpAddress
+    | extend UniqueTokenId = UniqueTokenIdentifier
+    | extend ActivityObjects = ""
+    // Following columns and data are not available in GraphAPIAuditEvents
+    | extend DeviceId = ""
+    | extend SessionId = ""
+    | extend UserAgent = ""
+    | extend Application = ""
+    // Graph API is a XDR hunting table and not ingested by App Connector, therefore no ApplicationId from MDA available
+    | extend ApplicationId = toint("")
+    | extend OAuthAppId = ApplicationId
+    | extend AppId = ApplicationId
+    | extend ResourceId = ""
+    // Following CloudAppEvents-specific columns are not available
+    | extend AuthType = "OAuth"
+    | extend AccountType = ""
+    | extend IsImpersonated = tobool("")
+    | extend IsAdminOperation = tobool("")
+    | extend TokenIssuedAt = ""
+    | extend IPTags = todynamic("")
+    | extend UncommonForUser = todynamic("")
+    | extend LastSeenForUser = todynamic("")
+    | extend Type = "Resource"
+    | extend Role = "Target object"
+    | extend Name = ObjectId
+    | extend Id = RequestUri
+    // Summarize some event details to provide ActivityObjects column (similiar to CloudAppEvents)
+    | extend ActivityObjects = bag_pack_columns(Type, Role, Name, Id)
+    | project Timestamp, AccountObjectId, DeviceId, AccountType, IsAdminOperation, Workload, Application, ApplicationId, ActivityType, ActivityObjects, ObjectType, ObjectId, OAuthAppId, AuthType, AuditSource, ReportId, IsImpersonated, UniqueTokenId, SessionId, TokenIssuedAt, AppId, ResourceId, IPAddress, RestoredOriginalIpAddress, IPTags, UserAgent, UncommonForUser, LastSeenForUser, RawEventData;
+    // Experimental: Correlation if Session from MDA Session Proxy
+    let MdaSessionProxyEvents = union SigninLogs, AADNonInteractiveUserSignInLogs
+        | where TimeGenerated >ago(Lookback)
+        | where AccountObjectId == (ActorAccountObjectId) or ActorAccountObjectId == ""
+        | where ResultType == "0"
+        | where AppDisplayName == @"Microsoft Defender for Cloud Apps - Session Controls"
+        // Weak identifier, in future: Filtering on CA policies which applies Session Control should be needed
+        | distinct UserId, IPAddress, SessionId
+        | join kind=inner (
+            CloudAppEvents
+            | where ActionType == @"SSO Logon" and TimeGenerated >ago(Lookback)
+            | project Timestamp, UserId = AccountObjectId, ActionType, Application, IPAddress, MdaSessionData = SessionData
+            | extend MdaSessionProxyId = tostring(parse_json(MdaSessionData)["InLineSessionId"])
+        ) on UserId, IPAddress
+        | summarize MdaSessionProxyIds = make_set(MdaSessionProxyId) by AccountObjectId = UserId, SessionId, Application;
+    // Summarize all collected events
+    union AzureEvents, M365Events, MsGraphApiEvents
+    | extend ActivityIpAddressFromGsa = iff(ipv4_is_in_any_range(IPAddress, KnownGsaIpRanges), true, false)
+    // Correlation with sign-in events in Microsoft Entra
+    | join kind=leftouter (
+        union SigninLogs, AADNonInteractiveUserSignInLogs
+            | where TimeGenerated >ago(SigninLookback) and ResultType == "0"
+            | where UserId == (ActorAccountObjectId) or ActorAccountObjectId == ""            
+            | extend AccessType = iff(ClientCredentialType in~ (DelegatedCredentialTypes), "Application", "User")
+            | extend DeviceDetail = iff(isempty( DeviceDetail_dynamic ), todynamic(DeviceDetail_string), DeviceDetail_dynamic)
+            | extend TokenProtectionStatus = iff(isempty( TokenProtectionStatusDetails_dynamic ), todynamic(TokenProtectionStatusDetails_string), TokenProtectionStatusDetails_dynamic)
+            | extend TokenProtection = TokenProtectionStatus.signInSessionStatus, SignInSessionStatusCode = TokenProtectionStatus.signInSessionStatus
+            | extend AuthProcessDetails = replace_string(AuthenticationProcessingDetails, " ", "")
+            | extend AuthProcessDetails = replace_string(AuthProcessDetails, "\r\n", "")
+            | parse-where AuthProcessDetails with * "IsCAEToken\",\"value\":\"" IsTokenCAE"\"" *
+            | project
+                SignInTime = CreatedDateTime,
+                AccessType,
+                AccountObjectId = UserId,
+                SigninDeviceId = tostring(tolower(DeviceDetail.deviceId)),
+                IsThroughGlobalSecureAccess,
+                GlobalSecureAccessIpAddress,
+                SigninIpAddress = IPAddress,
+                SigninSessionId = SessionId,
+                TokenProtection,
+                UniqueTokenId = UniqueTokenIdentifier,
+                IsTokenCAE
+    ) on UniqueTokenId
+    // SessionId is not available in GraphAPIAuditEvents and partly not available for some events in CloudAppEvents, fallback to use SessionId from SigninLogs
+    | extend SessionId = coalesce(SessionId, SigninSessionId)
+    | where SessionId == (ActorSessionId) or ActorSessionId == ""
+    // DeviceId is not available in GraphAPIAuditEvents and partly not available for some events in CloudAppEvents, fallback to use SessionId from SigninLogs
+    | extend DeviceId = coalesce(DeviceId, SigninDeviceId)
+    | where DeviceId == (ActorDeviceId) or ActorDeviceId == ""
+    | lookup (
+            NetworkAccessTraffic
+            | where TimeGenerated > ago(Lookback)
+            | where isnotempty(UniqueTokenId)
+            | where isempty(ActorAccountObjectId) or UserId == ActorAccountObjectId
+            | project AccountObjectId = UserId, DeviceId, UniqueTokenId, SourceIp, InitiatingProcessName, ConnectionId, TransactionId, AgentVersion
+    ) on UniqueTokenId
+    // Same IP address in activity and sign-in logs, should be set to true if activity was made outside of GSA but IP address matches with restored IP address from Entra sign-in
+    // Potential F/P by Microsoft back-end activity which uses token for delegation
+    | extend ActivityIpAddressMatchesWithSignin = case(
+        ActivityIpAddressFromGsa == true, iff(IPAddress == GlobalSecureAccessIpAddress, true, false),
+        iff(IPAddress == SigninIpAddress, true, false)
+    )
+    // OPTIONAL: Some fallback options because of missing IP address in relation to GSA
+    // Azure: IP Address of HTTP request is missing in some events which would be Caller IP address and not potential restored IP address.
+    // If original sign-in was made outside of GSA and IP address in CloudAppEvents is not a known GSA IP address, the RestoredIpAddress will also used as Caller IP Address
+    | extend IPAddress = iff(Workload == "Azure" and IsThroughGlobalSecureAccess == false and isempty(IPAddress) and not(ipv4_is_in_any_range(RestoredOriginalIpAddress, KnownGsaIpRanges)), RestoredOriginalIpAddress, IPAddress)
+    // M365: Source IP restoration is not available in CloudAppEvents
+    // If sign-in was made from GSA and Caller IPAddress in Activity are equal, the RestoredIpAddress will be calculated by using the original (non-GSA) IP address from the Sign-in logs
+    | extend RestoredOriginalIpAddress = iff(Workload != "Azure" and IsThroughGlobalSecureAccess == true and isempty(RestoredOriginalIpAddress) and (ipv4_is_in_any_range(IPAddress, KnownGsaIpRanges)), SigninIpAddress, RestoredOriginalIpAddress)
+    // GraphAPIAuditEvents: Only restored IP address and no caller IP addresses are available
+    // In case sign-in was made from GSA and Restored IP Address in sign-in with Activity matches, GlobalSecureAccessIpAddress will be used as Caller IP address
+    // if sign-in was made outside of GSA, the IP address from the activity logs will be used
+    | extend IPAddress = case(
+        Workload == "Microsoft Graph API" and IsThroughGlobalSecureAccess == true and isempty(IPAddress) and (tostring(RestoredOriginalIpAddress) == tostring(SigninIpAddress)),
+            GlobalSecureAccessIpAddress,
+        (Workload == "Microsoft Graph API" and IsThroughGlobalSecureAccess == false),
+            RestoredOriginalIpAddress,
+        IPAddress
+    )
+    | join kind=leftouter ( MdaSessionProxyEvents ) on AccountObjectId, Application, SessionId
+    | extend IsMdaSessionProxySession = iff(isnotempty(MdaSessionProxyIds), true, false)
+    | extend GlobalSecureAccess = bag_pack_columns(SourceIp, ConnectionId, TransactionId, InitiatingProcessName, AgentVersion)
+    | extend Authentication = bag_pack_columns(IsTokenCAE, AuthType, AccessType, TokenProtection)
+    | extend IpAddresses = bag_pack_columns(ActivityIpAddress = RestoredOriginalIpAddress, GlobalSecureAccessIpAddress, SigninIpAddress)
+    | extend CorrelatedSignInEvent = iff(isnotempty(SignInTime), true, false)
+    | project Timestamp, AccountObjectId, CorrelatedSignInEvent, SignInTime, SessionId, UniqueTokenId, DeviceId, Workload, ReportId, ActivityType, ActivityObjects, ObjectType, ObjectId, IPAddress, IPTags, ActivityIpAddressMatchesWithSignin, ActivityIpAddressFromGsa, IsThroughGlobalSecureAccess, IsMdaSessionProxySession, Authentication, IpAddresses, MdaSessionProxyIds, GlobalSecureAccess, RawEventData, LastSeenForUser, UncommonForUser
+    | sort by Timestamp
+};
+MicrosoftCloudActivity(
+    AccountObjectId="",
+    DeviceId="",
+    Lookback=4h,
+    SessionId="",
+    UniqueTokenId="",
+    Workload="")

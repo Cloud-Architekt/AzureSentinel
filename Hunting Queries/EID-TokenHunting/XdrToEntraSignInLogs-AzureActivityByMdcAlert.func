@@ -4,8 +4,7 @@
 // Pre-requisite: Save "XdrToEntraSignInLogs-SessionVerdicts.func" as function with the name SessionVerdicts
 
 // Get risky session from XDR alerts
-let AzureActivityByMdcAlert = (UserPrincipalName:string, IpAddress:string="", UniqueTokenIdentifier:string="") {
-    let Lookback = 30d;
+let AzureActivityByMdcAlert = (UserPrincipalName:string, IpAddress:string="", UniqueTokenIdentifier:string="", Lookback:timespan=30d) {
     let MdcAlertIds = AlertEvidence
     | where TimeGenerated >ago(Lookback)
     | where EntityType == "User" and AccountUpn contains (UserPrincipalName)
@@ -49,15 +48,16 @@ let AzureActivityByMdcAlert = (UserPrincipalName:string, IpAddress:string="", Un
     | extend ResourceEntityMatch = iff(ResourceEntity startswith (AlertResourceEntity), "AlertRelated", "Other")
     | extend ClaimsIpAddress = parse_json(Claims)["ipaddr"]
     | project-rename AzureAuthorization = Authorization_d    
-    | extend UniqueTokenIdentifier = tostring(parse_json(Claims)["uti"])
+    | extend UniqueTokenIdentifier =  tostring(parse_json(tostring(Claims))["uti"]) 
+    | extend SessionId =  tostring(parse_json(tostring(Claims))["sid"]) 
     | extend ArmResourceId = parse_json(Properties)["entity"]
     | extend ArmAction = parse_json(Properties)["message"]
     | sort by ActivityTimestamp
     | extend Action = bag_pack_columns(ActivityTimestamp, ArmAction, ArmResourceId, ArmCorrelationId)
-    | summarize ArmAction = make_set(Action) by AlertTimestamp, AlertId, AlertTitle = Title, Categories, AttackTechniques, ServiceSource, DetectionSource, CallerObjectId, CallerIpAddress, UniqueTokenIdentifier, AlertResourceEntity
+    | summarize ArmAction = make_set(Action) by AlertTimestamp, AlertId, AlertTitle = Title, Categories, AttackTechniques, ServiceSource, DetectionSource, CallerObjectId, CallerIpAddress, UniqueTokenIdentifier, SessionId, AlertResourceEntity
     | where UniqueTokenIdentifier contains (UniqueTokenIdentifier)
 };
-let TokensFromRiskySessions = SessionVerdicts | mv-expand UniqueTokenIdentifier | project AlertName, tostring(UniqueTokenIdentifier);
+let TokensFromRiskySessions = SessionVerdicts | mv-expand UniqueTokenIdentifier | project Alert, tostring(UniqueTokenIdentifier);
 AzureActivityByMdcAlert(UserPrincipalName="")
 // Correlation if token is part of risky session
 | join kind=inner ( TokensFromRiskySessions ) on UniqueTokenIdentifier

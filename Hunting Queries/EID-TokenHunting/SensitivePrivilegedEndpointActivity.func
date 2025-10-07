@@ -31,14 +31,6 @@ let SensitivePrivilegedInterfaceActivity = (Entity:string="", CaPolicyBlockedOut
     let PrivilegedGraphOperationsUri = (externaldata(Uri:string)
         [@"https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/refs/heads/main/PrivilegedOperations/GraphApiRequest.csv"] with (format="csv", ignoreFirstRecord=true)
     );
-    let PrivilegedGraphOperationsExcluded = dynamic([
-        '/beta/roleManagement/directory/estimateAccess'
-    ]);
-    let PrivilegedGraphOperations = dynamic([
-        'PATCH',
-        'POST',
-        'DELETE'
-    ]);
     let SignInWithConnections = union SigninLogs, AADNonInteractiveUserSignInLogs
     | where UserPrincipalName == (Entity) or UserId == (Entity)
     // Extending Auth processing details for CAE
@@ -96,7 +88,21 @@ let SensitivePrivilegedInterfaceActivity = (Entity:string="", CaPolicyBlockedOut
         ) on OperationId
         | extend TargetAadObjectIds = bag_pack_columns(ActivityTargetAadObjectIds, RequestTargetAadObjectId)
         | extend IsSensitiveTarget = iff(TargetAadObjectIds has_any (XspmCriticalAadObjectIds), "true", "false")
-        | extend IsSensitiveAction = iff((NormalizedRequestUri has_any(PrivilegedGraphOperationsUri) and NormalizedRequestUri !in (PrivilegedGraphOperationsExcluded) and RequestMethod in~ (PrivilegedGraphOperations)) == true, "true", "false")
+        | extend IsViewPost = RequestMethod == "POST" and (RequestUri has_any("checkAccess", "/get", "/checkMember", "/directory/estimateAccess", "/microsoft.graph.check", "/microsoft.graph.getMember", "/microsoft.graph.getMemberGroups") or RequestUri contains "/get")
+        | extend ActivityType = case(
+            RequestMethod in ("GET"), "View",
+            RequestMethod in ("PATCH", "PUT"), "Edit",
+            IsViewPost, "View",
+            RequestMethod == "POST" and RequestUri !endswith "$batch", "Edit",
+            RequestMethod == "DELETE", "Delete",
+            "Basic"
+        )        
+        | extend IsSensitiveAction = iff(
+            (
+                NormalizedRequestUri has_any(PrivilegedGraphOperationsUri)
+                and ActivityType != "View"
+            ) == true, "true",
+            "false")
         | extend GraphOperations = bag_pack_columns(ActivityTime = TimeGenerated, RequestId, OperationId, ClientRequestId, UserAgent, RequestUri, ActivityTargetAadObjectIds, ResponseSizeBytes, UserAgent, IsSensitiveAction, IsSensitiveTarget, UncommonForUser)
         | summarize Operations = make_set(GraphOperations) by ActivityIpAddress = IPAddress, tostring(TokenIssuedAt), UniqueTokenIdentifier = SignInActivityId, IsSensitiveAction, IsSensitiveTarget
     ) on UniqueTokenIdentifier
@@ -105,7 +111,7 @@ let SensitivePrivilegedInterfaceActivity = (Entity:string="", CaPolicyBlockedOut
     let AzureActivity = SignInWithConnections
     | join kind=inner ( CloudAppEvents
         | where Application == "Microsoft Azure"
-        | extend UniqueTokenIdentifier = tostring(RawEventData.uniqueTokenId)
+        | extend UniqueTokenIdentifier = coalesce(tostring(RawEventData.uniqueTokenId), tostring(parse_json(tostring(parse_json(RawEventData)["claims"]))["uti"]))
         | extend TokenIssuedAt = tostring(parse_json(tostring(RawEventData.claims)).iat)
         | extend ClientIpAddress = tostring(parse_json(tostring(RawEventData.httpRequest)).clientIpAddress)
         | extend CorrelationId = RawEventData.ActivityId

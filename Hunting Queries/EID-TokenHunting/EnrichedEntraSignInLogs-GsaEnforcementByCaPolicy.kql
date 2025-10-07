@@ -3,7 +3,7 @@
 // with details about exclusion on Compliant Network conditions in Conditional Access
 
 // Definition of Conditional Access Policy which blocks access outside of Compliant Network GSA
-let CaPolicyBlockedOutsideGsa = '<DisplayNameOfConditionalAccessPolicyForBlockedOutsideOfGSA>';
+let CaPolicyGsaBlockOutside = '<DisplayNameOfConditionalAccessPolicyForBlockedOutsideOfGSA>';
 // Definition of excluded Cloud Apps from compliant network CA, examples covers recommendation by Microsoft for exclusions
 let ExplicitlyGsaExcludedCloudAppIds = dynamic([
     "372140e0-b3b7-4226-8ef9-d57986796201", // Azure Windows VM Sign-In
@@ -11,15 +11,15 @@ let ExplicitlyGsaExcludedCloudAppIds = dynamic([
     "d4ebce55-015a-49b5-a083-c84d1797ae8c"  // Microsoft Intune Enrollment
 ]);
 union SigninLogs, AADNonInteractiveUserSignInLogs
-// Filter for sign-ins to home tenant only
-| where HomeTenantId == ResourceTenantId
-// Optional: Filter for specific time window and user
+// Filter for successful sign-ins to home tenant only
+| where HomeTenantId == ResourceTenantId and ResultType == "0" // Successful sign-ins
+// Filter for specific time window and user
 // | where UserPrincipalName == "<UserPrincipalName>"
 //         and CreatedDateTime between ( todatetime('<StartTime>') .. todatetime('<EndTime>') )
 // Expand device details
 | extend DeviceDetail = iff(isempty( DeviceDetail_dynamic ), todynamic(DeviceDetail_string), DeviceDetail_dynamic)
 | extend DeviceId = tostring(tolower(DeviceDetail.deviceId))
-| extend DeviceName = tostring(tolower(DeviceDetail.displayName))
+| extend DeviceName = tostring(toupper(DeviceDetail.displayName))
 // Expand Token Protection Status details
 | extend TokenProtectionStatus = iff(isempty( TokenProtectionStatusDetails_dynamic ), todynamic(TokenProtectionStatusDetails_string), TokenProtectionStatusDetails_dynamic)
 | extend SignInSessionStatus = tostring(TokenProtectionStatus.signInSessionStatus)
@@ -27,18 +27,17 @@ union SigninLogs, AADNonInteractiveUserSignInLogs
 | join kind = leftouter ( NetworkAccessTraffic
     | project TimeGenerated, TransactionId, ConnectionId, IPAddress = SourceIp, AgentVersion, UserId, DeviceId, UniqueTokenIdentifier = UniqueTokenId, InitiatingProcessName
 ) on UserId, DeviceId, UniqueTokenIdentifier, IPAddress
-// Workaround for missing valid property for IsThroughGlobalSecureAccess in sign-in logs
-| extend IsThroughGlobalSecureAccess = iff(isnotempty(TransactionId), true, false)
-// Summarize results for simplified view
+// Summarize Results
 | extend ResultType = toint(ResultType)
 | project-reorder CreatedDateTime, SessionId, IncomingTokenType, TokenIssuerType, SignInSessionStatus, UniqueTokenIdentifier, AppDisplayName, ResourceDisplayName, IsThroughGlobalSecureAccess, InitiatingProcessName
 // Correlation with events from XDR AH AADSignInEventsBeta to get Conditional Access details
 | join kind=innerunique (
     AADSignInEventsBeta
+    | where IsGuestUser == "0" and ErrorCode == "0"
 ) on $left.SessionId == $right.SessionId, $left.CorrelationId == $right.CorrelationId, $left.OriginalRequestId == $right.RequestId, $left.ResultType == $right.ErrorCode, $left.IPAddress == $right.IPAddress, $left.UserId == $right.AccountObjectId
-// Enrichment of GSA Insights 
+// Enrichment GSA Insights 
 | mv-apply ConditionalAccessPolicyGsa = parse_json(ConditionalAccessPolicies) to typeof(dynamic) on (
-    where ConditionalAccessPolicyGsa.displayName startswith (CaPolicyBlockedOutsideGsa)
+    where ConditionalAccessPolicyGsa.displayName startswith (CaPolicyGsaBlockOutside)
 )
     | extend IsGsaEnforced =  iff(
         (

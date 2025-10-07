@@ -1,0 +1,84 @@
+let UserActivityByRevokedTokens = (AccountObjectId:string, RevocationEventLookback:timespan=7d) {
+    let AffectedAccountObjectId = (AccountObjectId);
+    let LoobackTokenWindow = 90d;
+    let RevocationEvent = AuditLogs
+    | where TimeGenerated >ago(RevocationEventLookback)
+    | where OperationName == "Update StsRefreshTokenValidFrom Timestamp" and Result == "success"
+    | mv-expand parse_json(TargetResources)
+    | where parse_json(TargetResources)["id"] == (AffectedAccountObjectId)
+    | extend UserId = tostring(parse_json(TargetResources)["id"])
+    | sort by TimeGenerated desc
+    // Get oldest audit event when session has been successful revoked for the related user
+    | take 1
+    | project UserId, AccountObjectId = UserId, RevocationTimestamp = todatetime(TimeGenerated);
+    let IssuedTokens = RevocationEvent
+    | join kind=inner (
+        union SigninLogs, AADNonInteractiveUserSignInLogs
+        | where CreatedDateTime >ago(LoobackTokenWindow) and ResultType == "0"
+        ) on UserId
+        | where todatetime(CreatedDateTime) < (RevocationTimestamp)
+        | extend AuthProcessDetails = replace_string(AuthenticationProcessingDetails, " ", "")
+        | extend AuthProcessDetails = replace_string(AuthProcessDetails, "\r\n", "")
+        | parse-where AuthProcessDetails with * "IsCAEToken\",\"value\":\"" IsTokenCAE"\"" *
+        | project-rename SignInTime = CreatedDateTime
+        | distinct SignInTime, UniqueTokenIdentifier, SessionId, IsTokenCAE, IsThroughGlobalSecureAccess, AuthenticationProcessingDetails, AppDisplayName, ResourceDisplayName;
+    let IssuedTokenIdentifiers = IssuedTokens | summarize by UniqueTokenIdentifier;
+    let M365CloudAppEvents = CloudAppEvents
+        | where AccountObjectId == (AffectedAccountObjectId)
+        // Filter for events after revocation
+        | join kind = inner ( RevocationEvent ) on AccountObjectId
+        | where (todatetime(Timestamp) > todatetime(RevocationTimestamp))
+        | extend UniqueTokenIdentifier = tostring(parse_json(RawEventData)["AppAccessContext"]["UniqueTokenId"])
+        | extend AuthTime = todatetime((parse_json(RawEventData)["AppAccessContext"]["AuthTime"]))
+        | extend TokenIssuedAtTime = todatetime((parse_json(RawEventData)["AppAccessContext"]["TokenIssuedAtTime"]))
+        // Filter for tokens which has been issued before or IssuedAtTime is before revocation event 
+        | where isnotempty(UniqueTokenIdentifier)
+        | extend Workload = "Azure"    
+        | where UniqueTokenIdentifier has_any (IssuedTokenIdentifiers) or AuthTime < todatetime(RevocationTimestamp) or TokenIssuedAtTime < todatetime(RevocationTimestamp);
+    let AzureCloudAppEvents = CloudAppEvents
+        | where Application == "Microsoft Azure"
+        | where AccountObjectId == (AffectedAccountObjectId)
+        // Filter for events after revocation
+        | join kind = inner ( RevocationEvent ) on AccountObjectId
+        | where (todatetime(Timestamp) > todatetime(RevocationTimestamp))
+        | extend TokenClaims = parse_json(RawEventData)["claims"]
+        | extend UniqueTokenIdentifier = tostring(parse_json(tostring(TokenClaims))["uti"])
+        | extend TokenIssuedAtTime = todatetime(parse_json(tostring(TokenClaims))["iat"])
+        | extend TokenExpiry = todatetime(parse_json(tostring(TokenClaims))["exp"])
+        // Filter for tokens which has been issued before or IssuedAtTime is before revocation event 
+        | where isnotempty(UniqueTokenIdentifier)
+        | extend Workload = "Microsoft 365"
+        | where UniqueTokenIdentifier has_any (IssuedTokenIdentifiers) or TokenIssuedAtTime < todatetime(RevocationTimestamp);
+    let MSGraphAuditEvents = GraphAPIAuditEvents
+        | where AccountObjectId == (AffectedAccountObjectId)
+        // Filter for events after revocation
+        | join kind = inner ( RevocationEvent ) on AccountObjectId
+        | where (todatetime(Timestamp) > todatetime(RevocationTimestamp))
+        | extend Workload = "Microsoft Graph API"
+        | extend RawEventData = bag_remove_keys(pack_all(true), dynamic(["Timestamp"]));
+    let PrivateAccessActivity = NetworkAccessTraffic
+        | where TrafficType == "private" and UserId == (AffectedAccountObjectId)
+        // Filter for events after revocation
+        | join kind = inner ( RevocationEvent ) on $left.UserId == $right.AccountObjectId
+        | where todatetime(TimeGenerated) > todatetime(RevocationTimestamp)
+        | extend UniqueTokenIdentifier = tostring(Token3PUniqueId)
+        | extend TokenIssuedAtTime = todatetime(Token3PIssuedAt)
+        | extend TokenExpiry = todatetime(Token3PExpiry)
+        // Filter for tokens which has been issued before or IssuedAtTime is before revocation event 
+        | where isnotempty(UniqueTokenIdentifier)
+        | extend Workload = "Microsoft 365"
+        | where UniqueTokenIdentifier has_any (IssuedTokenIdentifiers) or TokenIssuedAtTime < todatetime(RevocationTimestamp)
+        | extend Workload = "Private Access"
+        | project-rename Timestamp = TimeGenerated
+        | extend RawEventData = bag_remove_keys(pack_all(true), dynamic(["Timestamp"]));
+    union AzureCloudAppEvents, M365CloudAppEvents, MSGraphAuditEvents, PrivateAccessActivity
+        | join kind=inner ( IssuedTokens ) on UniqueTokenIdentifier
+        | extend TimeBetweenActivityAndTokenIssued = datetime_diff('minute', Timestamp, TokenIssuedAtTime)
+        | extend TimeBetweenTokenIssuedAndAuth = datetime_diff('minute', TokenIssuedAtTime, AuthTime)
+        // Bug with datetime in AppContext, manual cleanup from events with wrong timestamps
+        | where tostring(AuthTime) !startswith "1601-"
+        // Use specific Private Acess Application Name if activity is coming from GSA
+        | extend TimeBetweenActivityAndTokenIssued = datetime_diff('minute', Timestamp, TokenIssuedAtTime)
+        | project RevocationTimestamp, ActivityTimestamp = Timestamp, SignInTime, UniqueTokenIdentifier, Workload, AppDisplayName, ResourceDisplayName, RawEventData, UncommonForUser, IsTokenCAE, IsThroughGlobalSecureAccess, TimeBetweenActivityAndTokenIssued, TimeBetweenTokenIssuedAndAuth, TokenExpiry, AuthenticationProcessingDetails
+};    
+UserActivityByRevokedTokens(AccountObjectId="")

@@ -1,9 +1,10 @@
 // Session Verdicts with Unique Token Identifiers
 // Correlation of session-related XDR alert to other sign-in events and their issued token (identifiers)
 
-let SessionVerdicts = (AccountUpn:string, AlertId:string="") {
+let SessionVerdicts = (AccountUpn:string, AlertId:string="", Looback:timespan=30d) {
   let AffectedSessionByRequests = SecurityAlert
-        | where TimeGenerated >ago(90d)
+        | where TimeGenerated >ago(Looback)
+        | where SystemAlertId contains (AlertId) or AlertId == ""
         // Get alerts with entity Cloud-Logon-Requests only
         | where Entities !contains 'cloud-logon-session'
         | mv-expand parse_json(Entities)
@@ -12,22 +13,26 @@ let SessionVerdicts = (AccountUpn:string, AlertId:string="") {
         | extend RequestId = tostring(Entities.RequestId)
         | join kind=leftouter (
             union SigninLogs, AADNonInteractiveUserSignInLogs
+            | where TimeGenerated >ago(Looback)            
             | where UserPrincipalName contains (AccountUpn)
             | distinct SessionId, RequestId = OriginalRequestId
         ) on RequestId
-    | summarize arg_max(TimeGenerated, *), Verdicts = make_set(Entities_ThreatAnalysisSummary.Verdict) by SessionId;
+    | summarize arg_max(TimeGenerated, *), ThreatVerdicts = make_set(Entities_ThreatAnalysisSummary.Verdict), ThreatAnalysisSummary = make_set(Entities_ThreatAnalysisSummary) by SystemAlertId, SessionId;
   let AffectedSessionBySessionId = SecurityAlert
-    | where SystemAlertId contains (AlertId)
+    | where TimeGenerated >ago(Looback)  
+    | where SystemAlertId contains (AlertId) or AlertId == ""
     // Get entities with SessionId
     | mv-expand parse_json(Entities)
     | where Entities.Type == 'cloud-logon-session'
+    | extend SessionId = coalesce(tostring(Entities.SessionId), tostring(parse_json(tostring(Entities))["SessionId"]))
     | mv-expand parse_json(tostring(Entities.ThreatAnalysisSummary))
-    | summarize arg_max(TimeGenerated, *), Verdicts = make_set(Entities_ThreatAnalysisSummary.Verdict) by SessionId = tostring(Entities.SessionId);
+    | summarize arg_max(TimeGenerated, *), ThreatVerdicts = make_set(Entities_ThreatAnalysisSummary.Verdict), ThreatAnalysisSummary = make_set(Entities_ThreatAnalysisSummary) by SystemAlertId, SessionId;
     let AffectedSessions = union AffectedSessionByRequests, AffectedSessionBySessionId
     | where isnotempty(SessionId)
     // Lookup for sign-ins with SessionId to get UniqueTokenIdentifier
     | join kind=inner (
             union SigninLogs, AADNonInteractiveUserSignInLogs
+            | where TimeGenerated >ago(Looback)            
             | where UserPrincipalName contains (AccountUpn)
             | project UserPrincipalName, SessionId, RequestId = OriginalRequestId, UniqueTokenIdentifier, CorrelationId
         | summarize UniqueTokenIdentifier = make_set(UniqueTokenIdentifier) by UserPrincipalName, SessionId
@@ -35,7 +40,9 @@ let SessionVerdicts = (AccountUpn:string, AlertId:string="") {
     | where UserPrincipalName contains (AccountUpn)
     | project-rename AccountUpn = UserPrincipalName
     | project-away SessionId1
-    | project-reorder TimeGenerated, SessionId, Verdicts, AlertName, AlertSeverity, StartTime, EndTime, UniqueTokenIdentifier;
+    | extend Alert = bag_pack_columns(AlertName, AlertSeverity, StartTime, EndTime, SystemAlertId)
+    | summarize Alert = make_set(Alert), UniqueTokenIdentifier = make_set(UniqueTokenIdentifier), ThreatVerdicts = make_set(ThreatVerdicts), ThreatAnalysisSummary = make_set(ThreatAnalysisSummary), Entities = make_set(Entities) by SessionId
+    | project-reorder SessionId, Alert, UniqueTokenIdentifier, ThreatVerdicts, ThreatAnalysisSummary, Entities;
   AffectedSessions
 };
 SessionVerdicts(AccountUpn="")
