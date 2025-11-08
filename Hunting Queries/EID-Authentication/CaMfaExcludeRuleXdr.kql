@@ -5,7 +5,7 @@ let MfaCaPolicyObject = AADSCA_CAP_CL
 let ExcludedUsers = MfaCaPolicyObject
     | mv-expand parse_json(conditions_users_excludeUsers_s)
     | summarize by tostring(conditions_users_excludeUsers_s);
-let NotAppliedSignIns = AADSignInEventsBeta
+let NotAppliedSignIns = EntraIdSignInEvents
     | mv-apply MfaPolicy = parse_json(ConditionalAccessPolicies) to typeof(dynamic) on (
         where MfaPolicy.displayName == (MfaCaPolicyName)
     )

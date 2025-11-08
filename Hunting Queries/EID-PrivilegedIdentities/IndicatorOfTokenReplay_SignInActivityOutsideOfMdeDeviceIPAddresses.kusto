@@ -5,10 +5,10 @@ let PublicIp = (DeviceInfo
 | extend LoggedOnUser = tostring(ParsedLoggedOnUsers.UserName)
 | where LoggedOnUser contains User
 | distinct PublicIP);
-AADSignInEventsBeta
+EntraIdSignInEvents
 | where AccountUpn contains User and IPAddress !in (PublicIp)
 | project Timestamp, Application, ResourceDisplayName, LogonType, ErrorCode, SessionId, IPAddress, Country
-| join kind=inner (AADSignInEventsBeta | where IPAddress in (PublicIp)) on $left.SessionId == $right.SessionId
+| join kind=inner (EntraIdSignInEvents | where IPAddress in (PublicIp)) on $left.SessionId == $right.SessionId
 | distinct Timestamp, SessionId, Application, ResourceDisplayName, Country, IPAddress, ErrorCode
 
 // Show only event with IPC alerts on SessionId

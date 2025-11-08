@@ -30,9 +30,9 @@ union SigninLogs, AADNonInteractiveUserSignInLogs
 // Summarize Results
 | extend ResultType = toint(ResultType)
 | project-reorder CreatedDateTime, SessionId, IncomingTokenType, TokenIssuerType, SignInSessionStatus, UniqueTokenIdentifier, AppDisplayName, ResourceDisplayName, IsThroughGlobalSecureAccess, InitiatingProcessName
-// Correlation with events from XDR AH AADSignInEventsBeta to get Conditional Access details
+// Correlation with events from XDR AH EntraIdSignInEvents to get Conditional Access details
 | join kind=innerunique (
-    AADSignInEventsBeta
+    EntraIdSignInEvents
     | where IsGuestUser == "0" and ErrorCode == "0"
 ) on $left.SessionId == $right.SessionId, $left.CorrelationId == $right.CorrelationId, $left.OriginalRequestId == $right.RequestId, $left.ResultType == $right.ErrorCode, $left.IPAddress == $right.IPAddress, $left.UserId == $right.AccountObjectId
 // Enrichment GSA Insights 

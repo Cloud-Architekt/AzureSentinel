@@ -30,7 +30,7 @@ let ExcludedPolicies = dynamic(['']);
 let ExcludedAppId = dynamic(['']);
 // Lookup EntraOps classification
 let SensitiveMsGraphPermissions = externaldata(EAMTierLevelName: string, Category: string, AppRoleDisplayName: string)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_AppRoles.json"] with(format='multijson');
-AADSignInEventsBeta
+EntraIdSignInEvents
 | where IsGuestUser == "0" and ErrorCode == "0"
 | where ApplicationId !in (ExcludedAppId)
 | mv-apply BypassPolicy = parse_json(ConditionalAccessPolicies) to typeof(dynamic) on (

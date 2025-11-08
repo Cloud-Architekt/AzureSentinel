@@ -35,7 +35,7 @@ let EnrichedEntraSignInLogs = (UserPrincipalName:string, UserDeviceName:string="
             "0000000a-0000-0000-c000-000000000000", // Microsoft Intune
             "d4ebce55-015a-49b5-a083-c84d1797ae8c"  // Microsoft Intune Enrollment
         ]);
-    AADSignInEventsBeta
+    EntraIdSignInEvents
     // Filter for specific range of sign-in time
         | project-rename SignInTime = TimeGenerated
     // Filter for internal users only
