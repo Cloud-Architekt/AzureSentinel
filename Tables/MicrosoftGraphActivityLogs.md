@@ -30,7 +30,7 @@
 | ResponseStatusCode | ✅ Yes | ✅ Yes |
 | ResponseSizeBytes | ✅ Yes | ❌ No |
 | | | |
-<br/>
-| **Legend**  | | | 
+| **color legend**  | | | 
 | | ✅ Available | | 
-| | 🟡 Exists in# Microsoft Graph Activity Logs | | 
+| | ⚠️ Present in the schema, but the value is empty | | 
+| | ❌ Not available | | 
