@@ -33,4 +33,4 @@
 <br/>
 | **Legend**  | | | 
 | | ✅ Available | | 
-| | 🟡 Exists in# Microsoft Graph Activity Logs
+| | 🟡 Exists in# Microsoft Graph Activity Logs | | 
