@@ -4,7 +4,7 @@
 | :--- | :--- | :--- |
 | **General** | | |
 | Billable | Yes | No |
-| Retention | 90 days (default) up to 2 years | 30 days (fixed) |
+| Retention | from 30 days (Analytics tier) up to 12 years (data lake tier) | 30 days (fixed) |
 | **Authorization** (from token claim) | | |
 | Roles | ✅ Yes | ❌ No |
 | Scopes | ✅ Yes | ✅ Yes |
