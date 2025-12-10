@@ -1,7 +1,5 @@
 # Microsoft Entra Service Principal Sign-In Events
 
-[SigninLogs]
-
 | | [AADServicePrincipalSignInLogs](https://learn.microsoft.com/en-us/azure/azure-monitor/reference/tables/AADServicePrincipalSignInLogs)<br>(Entra Diagnostic) | [AADManagedIdentitySignInLogs](https://learn.microsoft.com/en-us/azure/azure-monitor/reference/tables/AADServicePrincipalSignInLogs)<br>(Entra Diagnostic) | [EntraIdSpnSignInEvents](https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-entraidspnsigninevents-table)<br>(XDR Advanced Hunting) |
 | :--- | :--- | :--- | :--- |
 | **General** | | | |
