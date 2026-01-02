@@ -1,0 +1,117 @@
+let Lookback = 2d;
+let AffectedApps = dynamic([
+    "Microsoft Azure CLI",
+    "Microsoft Azure PowerShell",
+    "Microsoft Graph Command Line Tools"
+    ]);
+let BrowserProcesses = dynamic([
+    "msedge.exe",
+    "chrome.exe",
+    "iexplore.exe",
+    "firefox.exe",
+    "com.apple.Safari",
+    "com.microsoft.edgemac",
+    "com.microsoft.edgemac.helper"
+    ]);
+union SigninLogs, AADNonInteractiveUserSignInLogs
+| where CreatedDateTime > ago(Lookback)
+| where AppDisplayName in~ (AffectedApps)
+| extend TokenProtectionStatus = iff(isempty(TokenProtectionStatusDetails_dynamic), todynamic(TokenProtectionStatusDetails_string), TokenProtectionStatusDetails_dynamic)
+| extend
+    SignInSessionStatusCode = TokenProtectionStatus.signInSessionStatus
+| project-rename UniqueTokenId = UniqueTokenIdentifier
+| where ResultType == "0"
+| join kind = leftouter (NetworkAccessTraffic
+    | project UniqueTokenId, InitiatingProcessName)
+    on UniqueTokenId
+| project
+    InitialSignInTime = CreatedDateTime,
+    AppDisplayName,
+    InitialResource = ResourceDisplayName,
+    UserPrincipalName,
+    InitiatingProcessName,
+    SessionId,
+    InitialSignInUti = UniqueTokenId,
+    InitialIpAddress = IPAddress,
+    InitialAsn = AutonomousSystemNumber,
+    InitialSignInSessionStatus = tostring(SignInSessionStatusCode),
+    InitialIsGsa = IsThroughGlobalSecureAccess,
+    InitialTokenType = IncomingTokenType
+| join kind = inner (
+    union SigninLogs, AADNonInteractiveUserSignInLogs
+    | where Lookback == (Lookback)
+    | where AppDisplayName in~ (AffectedApps)
+    | where ResultType == "0"
+    | extend TokenProtectionStatus = iff(isempty(TokenProtectionStatusDetails_dynamic), todynamic(TokenProtectionStatusDetails_string), TokenProtectionStatusDetails_dynamic)
+    | extend
+        TokenProtection = TokenProtectionStatus.signInSessionStatus,
+        SignInSessionStatusCode = TokenProtectionStatus.signInSessionStatus
+    | project
+        SignInTime = CreatedDateTime,
+        ResourceDisplayName,
+        SignInSessionStatus = tostring(SignInSessionStatusCode),
+        SessionId,
+        UniqueTokenIdentifier,
+        IPAddress,
+        Asn = AutonomousSystemNumber,
+        IsGsa = IsThroughGlobalSecureAccess,
+        TokenType = IncomingTokenType
+    )
+    on SessionId
+| where SignInTime > InitialSignInTime
+| project-away SessionId1
+| project-reorder
+    InitialSignInTime,
+    SignInTime,
+    SessionId,
+    UserPrincipalName,
+    AppDisplayName,
+    InitialResource,
+    ResourceDisplayName,
+    InitialSignInSessionStatus,
+    SignInSessionStatus,
+    InitialIpAddress,
+    IPAddress,
+    InitialAsn,
+    Asn,
+    InitialIsGsa,
+    IsGsa
+| extend WithinAuthCodeExpirationTime = SignInTime - InitialSignInTime > 12m
+| extend ConfidenceScore = case(
+                               InitiatingProcessName in~ (BrowserProcesses) and InitialSignInSessionStatus != SignInSessionStatus,
+                               "Very high",
+                               (InitialSignInSessionStatus != SignInSessionStatus and InitialAsn != Asn) or (InitialIsGsa != IsGsa and SignInSessionStatus != "bound"),
+                               "High",
+                               (InitialAsn != Asn and WithinAuthCodeExpirationTime == true) and (InitialSignInSessionStatus != SignInSessionStatus and InitialTokenType != TokenType),
+                               "Medium",
+                                (SignInTime - InitialSignInTime > 5s) and (SignInTime - InitialSignInTime < 720s),
+                                "Low",
+                               "None"
+                           )
+| extend UseCaseDescription = case(
+                               InitiatingProcessName in~ (BrowserProcesses) and InitialSignInSessionStatus != SignInSessionStatus,
+                               "Browser Auth Code Flow used instead of WAM based on GSA logs",
+                               (InitialSignInSessionStatus != SignInSessionStatus and InitialAsn != Asn),
+                               "Auth Code Flow used instead of WAM and ASN changed between sign-ins",
+                               (InitialIsGsa != IsGsa and SignInSessionStatus != "bound"),
+                               "Change from compliant network (GSA) during authentication and initial token unbound",
+                               (InitialAsn != Asn and WithinAuthCodeExpirationTime == true) and (InitialSignInSessionStatus != SignInSessionStatus and InitialTokenType != TokenType),
+                               "ASN changed during authentication, seconds authentication within 10 minutes, token bound status changed",
+                               ""
+                           )
+| extend SignIn = bag_pack_columns(SignInTime, SignInSessionStatus, ResourceDisplayName, Asn, IPAddress, IsGsa, UniqueTokenIdentifier, TokenType)
+| summarize SignIns = make_set(SignIn)
+    by
+    InitialSignInTime,
+    UserPrincipalName,
+    AppDisplayName,
+    InitialSignInSessionStatus,
+    SessionId,
+    ConfidenceScore,
+    UseCaseDescription,
+    InitialIsGsa,
+    Asn,
+    IPAddress,
+    InitialTokenType,
+    InitiatingProcessName
+| sort by InitialSignInTime
