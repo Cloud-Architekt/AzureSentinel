@@ -29,6 +29,7 @@
 | DurationMs (RequestDuration) | ✅ Yes | ✅ Yes |
 | ResponseStatusCode | ✅ Yes | ✅ Yes |
 | ResponseSizeBytes | ✅ Yes | ❌ No |
+| Target Workload Namespace | ❌ No | ✅ Yes |
 | | | |
 | **color legend**  | | | 
 | | ✅ Available | | 
