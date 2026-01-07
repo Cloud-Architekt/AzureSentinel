@@ -1,8 +1,8 @@
 id: '4cc845ce-89fe-4645-814b-29ed0337344b'
 Function:
   Title: Parser for to get a list of all non-privileged and privileged users but also workload identities based on available data in Microsoft Defender XDR. Requires integration of Microsoft Sentinel to Defender XDR, MDI connector and enabled MDA App Governance.
-  Version: '1.1.0'
-  LastUpdated: '2025-12-10'
+  Version: '1.1.1'
+  LastUpdated: '2026-01-06'
 Category: Microsoft Sentinel Parser
 FunctionName: UnifiedIdentityInfoXdr
 FunctionAlias: UnifiedIdentityInfoXdr
