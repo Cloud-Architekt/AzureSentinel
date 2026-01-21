@@ -1,7 +1,6 @@
 // Using CloudAppEvents for unified schema between Azure and M365
 // Side Note: OfficeActivity also supports for linkable identifiers and AzureActivity offers also UniqueTokenId for correlation
 let MicrosoftCloudWorkloadActivity = (AppId:string, Lookback:timespan=1d, SessionId:string, UniqueTokenId:string, Workload:dynamic) {
-    let DelegatedCredentialTypes = dynamic(['clientAssertion', 'clientSecret', 'federatedIdentityCredential']);
     // Set parameters to variables
     let ActorAccountObjectId = AppId;
     let ActorSessionId = SessionId;
@@ -150,9 +149,9 @@ let MicrosoftCloudWorkloadActivity = (AppId:string, Lookback:timespan=1d, Sessio
                 Type == "SigninLogs" or Type == "AADNonInteractiveUserSignInLogs", "User",
                 "Unknown")            
             | extend Credential = case(
-                isnotempty(ServicePrincipalCredentialKeyId), bag_pack("ClientSecret", ServicePrincipalCredentialKeyId),
-                isnotempty(FederatedCredentialId), bag_pack("FederatedCred", FederatedCredentialId),
-                isnotempty(ServicePrincipalCredentialThumbprint), bag_pack("ClientCertificate", ServicePrincipalCredentialThumbprint),
+                isnotempty(ServicePrincipalCredentialKeyId) and ServicePrincipalCredentialKeyId != "00000000-0000-0000-0000-000000000000", bag_pack("CredentialKeyId", ServicePrincipalCredentialKeyId),
+                isnotempty(FederatedCredentialId), bag_pack("FederatedCredentialId", FederatedCredentialId),
+                isnotempty(ServicePrincipalCredentialThumbprint), bag_pack("CredentialThumbprintId", ServicePrincipalCredentialThumbprint),
                 "N/A"
                 )
             | project
