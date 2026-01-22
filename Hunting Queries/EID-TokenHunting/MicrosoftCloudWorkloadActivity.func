@@ -1,6 +1,11 @@
+// Does not include MicrosoftServicePrincipalSignInLogs because it's mostly not ingested and therefore no sign-in correlation of 1P sign-ins 
 // Using CloudAppEvents for unified schema between Azure and M365
 // Side Note: OfficeActivity also supports for linkable identifiers and AzureActivity offers also UniqueTokenId for correlation
 let MicrosoftCloudWorkloadActivity = (AppId:string, Lookback:timespan=1d, SessionId:string, UniqueTokenId:string, Workload:dynamic) {
+    // Get list of first party apps to flag missing sign-in correlation because of 1P apps and mostly missing MicrosoftServicePrincipalSignInLogs
+    let FirstPartyApps = externaldata(AppId: string)
+        ["https://raw.githubusercontent.com/merill/microsoft-info/main/_info/MicrosoftApps.json"] with(format='multijson')
+        | summarize by AppId;
     // Set parameters to variables
     let ActorAccountObjectId = AppId;
     let ActorSessionId = SessionId;
@@ -51,7 +56,7 @@ let MicrosoftCloudWorkloadActivity = (AppId:string, Lookback:timespan=1d, Sessio
     | extend AppId = tostring(coalesce(parse_json(RawEventData)["AppAccessContext"]["ClientAppId"], parse_json(RawEventData)["ClientAppId"]))
     | extend ResourceId = tostring(parse_json(RawEventData)["AppAccessContext"]["APIId"])
     | extend IPAddress = coalesce(tostring(parse_json(RawEventData)["ClientIP"]), tostring(parse_json(RawEventData)["ClientIPAddress"]))
-    // Some ClientIPAddress values contains port, remove port number from IPAddress
+    // Some ClientIPAddress values contain port, remove port number from IPAddress
     | extend IPAddress = iff(IPAddress matches regex @"^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}:\d+$", split(IPAddress, ":")[0], IPAddress)
     // Restored IP Address is only available in OfficeActivity and limited to SharePoint (https://learn.microsoft.com/en-us/entra/global-secure-access/how-to-view-enriched-logs#how-to-view-the-logs)
     | extend RestoredOriginalIpAddress = ""
@@ -109,7 +114,6 @@ let MicrosoftCloudWorkloadActivity = (AppId:string, Lookback:timespan=1d, Sessio
     | extend UniqueTokenId = UniqueTokenIdentifier
     | extend ActivityObjects = ""
     // Following columns and data are not available in GraphAPIAuditEvents
-    | extend SessionId = SessionId
     | extend UserAgent = ""
     | extend Application = ""
     // Graph API is a XDR hunting table and not ingested by App Connector, therefore no ApplicationId from MDA available
@@ -130,7 +134,7 @@ let MicrosoftCloudWorkloadActivity = (AppId:string, Lookback:timespan=1d, Sessio
     | extend Role = "Target object"
     | extend Name = ObjectId
     | extend Id = RequestUri
-    // Summarize some event details to provide ActivityObjects column (similiar to CloudAppEvents)
+    // Summarize some event details to provide ActivityObjects column (similar to CloudAppEvents)
     | extend ActivityObjects = bag_pack_columns(Type, Role, Name, Id)
     | project Timestamp, AccountId, AccountType, IsAdminOperation, Workload, Application, ApplicationId, ActivityType, ActivityObjects, ObjectType, ObjectId, OAuthAppId, AuthType, AuditSource, ReportId, IsImpersonated, UniqueTokenId, SessionId, TokenIssuedAt, AppId, ResourceId, IPAddress, RestoredOriginalIpAddress, IPTags, UserAgent, UncommonForUser, LastSeenForUser, RawEventData;
     union AzureEvents, M365Events, MsGraphApiEvents
@@ -170,7 +174,11 @@ let MicrosoftCloudWorkloadActivity = (AppId:string, Lookback:timespan=1d, Sessio
     ) on UniqueTokenId
     // SessionId is not available in GraphAPIAuditEvents and partly not available for some events in CloudAppEvents, fallback to use SessionId from SigninLogs
     | extend SessionId = coalesce(SessionId, SigninSessionId)
-    | extend AccessType = coalesce(AccessType, "Unknown")
+    | extend AccessType = case(
+        isnotempty(AccessType), AccessType,
+        AccountId in~ (FirstPartyApps), "MicrosoftFirstPartyApp",
+        "Unknown"
+    )
     | where SessionId == (ActorSessionId) or ActorSessionId == ""
     | extend CorrelatedSignInEvent = iff(isnotempty(SignInTime), true, false)
     | project Timestamp, AccountId, AccessType, PrincipalId, PrincipalType, CorrelatedSignInEvent, SignInTime, SessionId, UniqueTokenId, Workload, ReportId, ActivityType, ActivityObjects, ObjectType, ObjectId, IPAddress, IPTags, RawEventData, LastSeenForUser, UncommonForUser, Credential, ClientCredentialType, IsTokenCAE
