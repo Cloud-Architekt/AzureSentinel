@@ -147,6 +147,17 @@ let MicrosoftCloudWorkloadActivity = (AppId:string, Lookback:timespan=1d, Sessio
             | extend AuthProcessDetails = replace_string(AuthProcessDetails, "\r\n", "")
             | parse-where AuthProcessDetails with * "IsCAEToken\",\"value\":\"" IsTokenCAE"\"" *
             | extend PrincipalId = iff(isnotempty(UserId), UserId, ServicePrincipalId)
+            // Extract Authentication Library Details
+            | extend ClientAuth = parse_json(AuthenticationProcessingDetails)[0].key
+            | extend ClientAuthDetails = tostring(parse_json(AuthenticationProcessingDetails)[0].value)
+            | extend AuthLibFamily = iff(isnotempty(ClientAuthDetails), extract("Family: (.*) Library", 1, ClientAuthDetails), "Unknown")
+            | extend AuthLibProduct = iff(isnotempty(ClientAuthDetails), extract("Library: (.*) Platform", 1, ClientAuthDetails), "Unknown")
+            | extend AuthLibProductName = iff(isnotempty(ClientAuthDetails), replace(" [0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+", "", AuthLibProduct), "Unknown")
+            | extend AuthLibProductVersion = iff(isnotempty(ClientAuthDetails), extract(".* ([0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+)", 1, AuthLibProduct), "Unknown")
+            // Enforce Semantic Versioning between MSAL products (MSAL.Python and MSAL.NET)
+            | extend AuthLibProductName = iff(AuthLibProductName matches regex " ([0-9]+\\.[0-9]+\\.[0-9])", replace(" ([0-9]+\\.[0-9]+\\.[0-9])", "", AuthLibProduct), AuthLibProductName)
+            | extend AuthLibProductVersion = iff(AuthLibProduct matches regex ".* ([0-9]+\\.[0-9]+\\.[0-9])", extract(".* ([0-9]+\\.[0-9]+\\.[0-9])", 1, AuthLibProduct), AuthLibProductVersion)
+            | extend AuthLibPlatform = iff(isnotempty(ClientAuthDetails), extract("Platform:(.*)", 1, ClientAuthDetails), "Unknown")          
             | extend PrincipalType = case(
                 Type == "AADServicePrincipalSignInLogs", "ServicePrincipal",
                 Type == "AADManagedIdentitySignInLogs", "ManagedIdentity",
@@ -163,10 +174,15 @@ let MicrosoftCloudWorkloadActivity = (AppId:string, Lookback:timespan=1d, Sessio
                 ClientCredentialType,
                 Credential,
                 ManagedServiceIdentity,
-                UserAgent,
+                SigninUserAgent = UserAgent,
                 SigninIpAddress = IPAddress,
                 SigninSessionId = SessionId,
                 UniqueTokenId = UniqueTokenIdentifier,
+                AuthLibFamily,
+                AuthLibPlatform,
+                AuthLibProduct,
+                AuthLibProductName,
+                AuthLibProductVersion,
                 IsTokenCAE,
                 AccessType,
                 PrincipalId,
@@ -181,7 +197,15 @@ let MicrosoftCloudWorkloadActivity = (AppId:string, Lookback:timespan=1d, Sessio
     )
     | where SessionId == (ActorSessionId) or ActorSessionId == ""
     | extend CorrelatedSignInEvent = iff(isnotempty(SignInTime), true, false)
-    | project Timestamp, AccountId, AccessType, PrincipalId, PrincipalType, CorrelatedSignInEvent, SignInTime, SessionId, UniqueTokenId, Workload, ReportId, ActivityType, ActivityObjects, ObjectType, ObjectId, IPAddress, IPTags, RawEventData, LastSeenForUser, UncommonForUser, Credential, ClientCredentialType, IsTokenCAE
+    | extend AuthenticationLibrary = iff(
+        isnotempty(AuthLibProduct), bag_pack_columns(
+                AuthLibProduct,        
+                AuthLibFamily,
+                AuthLibPlatform,
+                AuthLibProductName,
+                AuthLibProductVersion
+        ), "")
+    | project Timestamp, AccountId, AccessType, PrincipalId, PrincipalType, CorrelatedSignInEvent, SignInTime, SessionId, UniqueTokenId, Workload, ReportId, ActivityType, ActivityObjects, ObjectType, ObjectId, IPAddress, IPTags, RawEventData, LastSeenForUser, UncommonForUser, Credential, ClientCredentialType, IsTokenCAE, UserAgent, SigninUserAgent, AuthenticationLibrary
     | sort by Timestamp
 };
 MicrosoftCloudWorkloadActivity(
