@@ -11,8 +11,8 @@ let MicrosoftCloudWorkloadActivity = (AppId:string, Lookback:timespan=1d, Sessio
     let ActorSessionId = SessionId;
     let ActorUniqueId = UniqueTokenId;
     let FilteredWorkload = Workload;
-    // Add another 24h for lookup to the sign-in logs to find sign-in activities from CAE token
-    let SigninLookback = iff(isempty(Lookback), 90d, Lookback +90d);
+    // Add another 28h for lookup to the sign-in logs to find sign-in activities from CAE token
+    let SigninLookback = iff(isempty(Lookback), 28h, Lookback +28h);
     // Collecting Events from Microsoft Azure App Connector
     let AzureEvents = CloudAppEvents
     | where Timestamp >ago(Lookback) and AccountType == "Application"
