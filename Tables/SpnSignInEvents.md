@@ -29,7 +29,7 @@
 | | ✅  CorrelationId | ✅  CorrelationId | ✅  CorrelationId |
 | | ✅  Id | ✅  Id | ✅  RequestId |
 | | ✅  SessionId | ⚠️ SessionId | ✅  SessionId* |
-| | ✅  UniqueTokenIdentifier | ✅  UniqueTokenIdentifier | ❌ N/A |
+| | ✅  UniqueTokenIdentifier | ✅  UniqueTokenIdentifier | ✅  UniqueTokenId |
 | **Agent details** | | | |
 | | ✅  Agent | ✅  Agent | ❌ N/A |
 | **App or Workload Identity Details** | | | |
