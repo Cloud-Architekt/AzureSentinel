@@ -47,7 +47,7 @@
 | | ✅ SessionId | ✅ SessionId |
 | | ✅ SignInIdentifier | ❌ N/A |
 | | ✅ SignInIdentifierType | ❌ N/A |
-| | ✅ UniqueTokenIdentifier | ❌ N/A |
+| | ✅ UniqueTokenIdentifier | ✅ UniqueTokenId |
 | **Agent details**| | |
 | | ✅ Agent | ❌ N/A |
 | **App or Workload Identity Details** | | |
@@ -95,7 +95,7 @@
 | | ✅ GlobalSecureAccessIpAddress | ❌ N/A |
 | | ✅ IPAddress | ✅ IPAddress |
 | | ✅ IPAddressFromResourceProvider | ❌ N/A |
-| | ✅ IsThroughGlobalSecureAccess | ❌ N/A |
+| | ✅ IsThroughGlobalSecureAccess | ✅ IsSignInThroughGlobalSecureAccess |
 | | ✅ NetworkLocationDetails | ✅ NetworkLocationDetails |
 | **Security and risk details** | | |
 | | ✅ FlaggedForReview | ❌ N/A |
