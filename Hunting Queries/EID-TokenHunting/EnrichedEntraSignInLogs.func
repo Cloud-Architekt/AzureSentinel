@@ -115,7 +115,7 @@ let EnrichedEntraSignInLogs = (UserPrincipalName:string, UserDeviceName:string="
             ), True, False) 
         | join kind = leftouter ( NetworkAccessTraffic
             | project TimeGenerated, TransactionId, ConnectionId, IPAddress = SourceIp, AgentVersion, UserId, DeviceId, UniqueTokenIdentifier = UniqueTokenId, InitiatingProcessName
-        ) on UserId, DeviceId, UniqueTokenIdentifier, IPAddress                 
+        ) on UniqueTokenIdentifier, IPAddress                 
     // Enrichment Token Protection Insights Insights
         | mv-apply ConditionalAccessPolicyTokenProtection = parse_json(ConditionalAccessPolicies) to typeof(dynamic) on (
             where ConditionalAccessPolicyTokenProtection.displayName startswith (CaPolicyTokenProtectionApplied)

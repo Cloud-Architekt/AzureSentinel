@@ -35,7 +35,7 @@ union SigninLogs, AADNonInteractiveUserSignInLogs
 // Correlation with GSA network traffic
 | join kind = leftouter ( NetworkAccessTraffic
     | project TimeGenerated, TransactionId, ConnectionId, IPAddress = SourceIp, AgentVersion, UserId, DeviceId, UniqueTokenIdentifier = UniqueTokenId, InitiatingProcessName
-) on UserId, DeviceId, UniqueTokenIdentifier, IPAddress
+) on UniqueTokenIdentifier, IPAddress
 | extend IsThroughGlobalSecureAccess = iff(isnotempty(TransactionId), true, false)
 // Enrichment Authentication Insights
     | extend SignInType = iff(IsInteractive == true, "Interactive", "NonInteractive")
