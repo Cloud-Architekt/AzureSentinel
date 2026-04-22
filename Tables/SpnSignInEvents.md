@@ -46,6 +46,7 @@
 | | ✅  UserAgent | ⚠️ UserAgent | ✅  UserAgent* |
 | | ❌ N/A | ⚠️ SourceAppClientId | ❌ N/A |
 | **Conditional Access** | | | |
+| | ✅  ConditionalAccessAudiences | ✅  ConditionalAccessAudiences | ❌ N/A |
 | | ✅  ConditionalAccessPolicies | ✅  ConditionalAccessPolicies | ❌ N/A |
 | | ⚠️ ConditionalAccessPoliciesV2 | ⚠️ ConditionalAccessPoliciesV2 | ❌ N/A |
 | | ✅  ConditionalAccessStatus | ✅  ConditionalAccessStatus | ❌ N/A |

@@ -18,6 +18,7 @@
 | | ✅ AuthenticationProtocol | ❌ N/A |
 | | ✅ AuthenticationRequirement | ✅ AuthenticationRequirement |
 | | ✅ AuthenticationRequirementPolicies | ❌ N/A |
+| | ✅ AuthenticatorAppLocation | ❌ N/A |
 | | ✅ CrossTenantAccessType | ❌ N/A |
 | **Sign-in**| | |
 | | ✅ AADTenantId | ❌ N/A |
@@ -47,6 +48,7 @@
 | | ✅ SessionId | ✅ SessionId |
 | | ✅ SignInIdentifier | ❌ N/A |
 | | ✅ SignInIdentifierType | ❌ N/A |
+| | ⚠️ SignInEventTypes | ❌ N/A |
 | | ✅ UniqueTokenIdentifier | ✅ UniqueTokenId |
 | **Agent details**| | |
 | | ✅ Agent | ❌ N/A |
@@ -73,6 +75,7 @@
 | | ✅ UserAgent | ✅ UserAgent |
 | **Conditional Access** | | |
 | | ✅ AppliedConditionalAccessPolicies | ❌ N/A |
+| | ✅ ConditionalAccessAudiences | ❌ N/A |
 | | ✅ ConditionalAccessPolicies | ✅ ConditionalAccessPolicies |
 | | ❌ N/A | ⚠️ ConditionalAccessPoliciesV2 |
 | | ✅ ConditionalAccessStatus | ✅ ConditionalAccessStatus |
@@ -127,7 +130,7 @@
 | | ✅ Type | ✅ Type |
 | **Telemetry** | | |
 | | ✅ DurationMs | ❌ N/A |
-| | ✅ ProcessingTimeInMilliseconds | ❌ N/A |
+| | ✅ ProcessingTimeInMilliseconds; ProcessingTimeInMs | ❌ N/A |
 | | | |
 | **color legend**  | | | 
 | | ✅ Available | | 
