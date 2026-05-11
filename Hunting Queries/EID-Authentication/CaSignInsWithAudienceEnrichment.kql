@@ -1,0 +1,215 @@
+// =============================================================================
+// KQL Function: CASignInsWithAudienceEnrichment
+// =============================================================================
+// PURPOSE:
+//   The ConditionalAccessAudiences field in sign-in logs contains raw App IDs
+//   (GUIDs) of every service principal evaluated during Conditional Access.
+//   This function resolves those IDs to human-readable names by combining three
+//   complementary lookup sources, then re-aggregates to one row per sign-in
+//   request and surfaces per-CA-policy outcomes.
+//
+// PARAMETERS (all optional — omit or pass defaults to disable a filter):
+//   LookbackDuration             timespan  How far back to query (default: 1d)
+//   FilterRequestId              string    Restrict to a specific RequestId
+//   FilterCorrelationId          string    Restrict to a specific CorrelationId
+//   FilterAccountUpn             string    Restrict to a specific user UPN
+//   FilterAudienceAppDisplayName string    Only return sign-ins where this app
+//                                          name appears as a CA audience.
+//                                          Pass 'Unknown' to surface sign-ins
+//                                          with unresolved audience App IDs.
+//
+// LOOKUP PRIORITY (first match wins via union + take_any):
+//   1. EntraScopes       – research result of Fabian Bader and Dirk-jan Mollema about first‑party applications, FOCI membership and associated Conditional Access‑bypassing client‑scope combinations
+//   2. Tenant telemetry  – names actually seen in your own interactive and non-interactive sign-in logs
+//   3. merill/microsoft-info – curated Microsoft first-party app list by Merill Fernando
+//
+// TABLES REQUIRED:
+//   - EntraIdSignInEvents             (Defender XDR / Advanced Hunting)
+//   - SigninLogs                      (Azure Monitor / Sentinel)
+//   - AADNonInteractiveUserSignInLogs (Azure Monitor / Sentinel)
+//     ↳ ConditionalAccessAudiences is absent from the XDR schema; it is
+//       bridged in via a join on RequestId / OriginalRequestId.
+//
+// TO SAVE AS A SENTINEL SAVED FUNCTION:
+//   Uncomment the .create-or-alter block below and run it in Log Analytics.
+// =============================================================================
+
+// CASignInsWithAudienceEnrichment(
+//     LookbackDuration             : timespan = 1d,
+//     FilterRequestId              : string   = '',
+//     FilterCorrelationId          : string   = '',
+//     FilterAccountUpn             : string   = '',
+//     FilterAudienceAppDisplayName : string   = ''
+// )
+// {
+let CASignInsWithAudienceEnrichment = (
+    LookbackDuration             : timespan = 1d,
+    FilterRequestId              : string   = '',
+    FilterCorrelationId          : string   = '',
+    FilterAccountUpn             : string   = '',
+    FilterAudienceAppDisplayName : string   = ''
+) {
+// ---------------------------------------------------------------------------
+// Lookup Source 1: EntraScopes first-party app catalog
+// ---------------------------------------------------------------------------
+let EntraScopesApps =
+    externaldata(apps: dynamic)['https://entrascopes.com/firstpartyscopes.json']
+    with(format='singlejson')
+    | mv-expand ApplicationId = bag_keys(apps)
+    | extend AppIdStr = tostring(ApplicationId)
+    | extend IsFoci = tobool(apps[AppIdStr]["foci"])
+    | project
+        AppId          = AppIdStr,
+        AppDisplayName = tostring(apps[AppIdStr]["name"]),
+        IsFoci;
+// ---------------------------------------------------------------------------
+// Lookup Source 2: Tenant telemetry name cache
+// Build AppId → Name pairs from both the client-app and the resource sides of
+// sign-in events. Names seen in your own tenant are treated as authoritative
+// ---------------------------------------------------------------------------
+let SigninAppResource =
+    EntraIdSignInEvents
+    | where Timestamp > ago(LookbackDuration)
+    | summarize AppDisplayName = take_any(Application) by AppId = ApplicationId
+    | union
+        (EntraIdSignInEvents
+         | where Timestamp > ago(LookbackDuration)
+         | summarize AppDisplayName = take_any(ResourceDisplayName) by AppId = ResourceId);
+// ---------------------------------------------------------------------------
+// Lookup Source 3: merill/microsoft-info first-party app list
+// App IDs in JSON-Lines format, covering apps not in EntraScopes or telemetry.
+// ---------------------------------------------------------------------------
+let FirstPartyApps =
+    externaldata(AppId: string, AppDisplayName: string, AppOwnerOrganizationId: string, Source: string)
+    ["https://raw.githubusercontent.com/merill/microsoft-info/main/_info/MicrosoftApps.json"]
+    with(format='multijson')
+    | project AppId, AppDisplayName;
+// ---------------------------------------------------------------------------
+// Unified app-name lookup (Sources 1 → 2 → 3, first match wins)
+// take_any() returns the first non-null value across the union, so tenant
+// telemetry (Source 1) takes precedence over the external catalogs.
+// ---------------------------------------------------------------------------
+let ServicePrincipals =
+    union EntraScopesApps, SigninAppResource, FirstPartyApps
+    | where isnotempty(AppId)
+    | summarize AppDisplayName = take_any(AppDisplayName) by AppId;
+// ---------------------------------------------------------------------------
+// CA audience bridge: pull ConditionalAccessAudiences from Monitor / Sentinel
+// This field is absent in the Defender XDR schema (EntraIdSignInEvents) but
+// present in SigninLogs and AADNonInteractiveUserSignInLogs. Only the two
+// columns needed downstream are projected to keep this intermediate set small.
+// ---------------------------------------------------------------------------
+let CAudiences =
+    union SigninLogs, AADNonInteractiveUserSignInLogs
+    | where TimeGenerated > ago(LookbackDuration)
+    | where isnotempty(OriginalRequestId)
+    | project RequestId = OriginalRequestId, ConditionalAccessAudiences;
+// ===========================================================================
+// Main query
+// ===========================================================================
+EntraIdSignInEvents
+| where Timestamp > ago(LookbackDuration)
+| where isnotempty(RequestId)
+// --- Optional early filters (reduce scan volume before any joins) -----------
+| where isempty(FilterRequestId)     or RequestId     == FilterRequestId
+| where isempty(FilterCorrelationId) or CorrelationId == FilterCorrelationId
+| where isempty(FilterAccountUpn)    or AccountUpn    =~ FilterAccountUpn
+| project
+    AccountUpn,
+    AppDisplayName          = Application,
+    AppId                   = ApplicationId,
+    ResourceDisplayName,
+    ResourceId,
+    RequestId,
+    ErrorCode,
+    CorrelationId,
+    ConditionalAccessStatus,
+    ConditionalAccessPolicies
+| lookup kind=leftouter CAudiences on RequestId
+| where isnotempty(ConditionalAccessAudiences)
+| mv-expand Audience = parse_json(ConditionalAccessAudiences)
+| extend AudienceId = tostring(Audience)
+// Resolve each audience App ID to a display name using the unified lookup
+| lookup ServicePrincipals on $left.AudienceId == $right.AppId
+| extend
+    AudienceAppId       = AudienceId,
+    // Fix #3: unresolved App IDs are labelled "Unknown" for explicit tracking
+    AudienceDisplayName = coalesce(AppDisplayName1, "Unknown"),
+    IsUnknownAudience   = isempty(AppDisplayName1)
+| project-away Audience, ConditionalAccessAudiences, AppDisplayName1
+// Pack each resolved audience into a property bag for the final aggregation.
+// IsUnknownAudience is included so consumers can filter without re-expanding.
+| extend AudienceBag = bag_pack(
+    "AudienceAppId",       AudienceAppId,
+    "AudienceDisplayName", AudienceDisplayName,
+    "IsUnknownAudience",   IsUnknownAudience)
+// --- Re-aggregate: collapse back to one row per sign-in request -------------
+// TargetAudienceMatchCount counts how many expanded audience rows match the
+// optional FilterAudienceAppDisplayName; used for post-aggregate filtering.
+| summarize
+    AccountUpn                      = take_any(AccountUpn),
+    AppDisplayName                  = take_any(AppDisplayName),
+    ResourceDisplayName             = take_any(ResourceDisplayName),
+    // Raw policy array carried forward as a single value (same for all
+    // audience rows in the same request) for mv-apply in Fix #5 below.
+    ConditionalAccessPoliciesRaw    = take_any(parse_json(ConditionalAccessPolicies)),
+    ConditionalAccessStatus         = take_any(ConditionalAccessStatus),
+    ErrorCode                       = take_any(ErrorCode),
+    ConditionalAccessAudiences      = make_set(AudienceBag, 100),
+    ConditionalAccessAudiencesCount = dcount(AudienceAppId),
+    UnknownAudienceCount            = countif(IsUnknownAudience),
+    // Internal counter used for audience display-name filtering below.
+    TargetAudienceMatchCount        = countif(
+        isempty(FilterAudienceAppDisplayName)
+        or AudienceDisplayName =~ FilterAudienceAppDisplayName)
+    by AppId, ResourceId, CorrelationId, RequestId
+| mv-apply Policy = ConditionalAccessPoliciesRaw on (
+    summarize
+        PolicyOutcomes        = make_set(bag_pack(
+            "PolicyId",          tostring(Policy.id),
+            "PolicyDisplayName", tostring(Policy.displayName),
+            "PolicyResult",      tostring(Policy.result),
+            "GrantControls",     Policy.enforcedGrantControls,
+            "SessionControls",   Policy.enforcedSessionControls), 50),
+        BlockedPolicyCount    = countif(tostring(Policy.result) == "failure"),
+        NotAppliedPolicyCount = countif(tostring(Policy.result) == "notApplied")
+)
+// --- Final column order -----------------------------------------------------
+| project
+    RequestId,
+    CorrelationId,
+    AccountUpn,
+    AppId,
+    AppDisplayName,
+    ResourceId,
+    ResourceDisplayName,
+    ErrorCode,
+    ConditionalAccessStatus,
+    ConditionalAccessAudiences,
+    ConditionalAccessAudiencesCount,
+    ConditionalAccessPoliciesRaw,
+    UnknownAudienceCount,
+    PolicyOutcomes,
+    BlockedPolicyCount,
+    NotAppliedPolicyCount
+}; // end function body  (remove this line when saving as Sentinel function)
+// ===========================================================================
+// Usage examples
+// ===========================================================================
+// All sign-ins for the last 24 hours (no filters):
+CASignInsWithAudienceEnrichment()
+//
+// Filter by specific RequestId:
+// CASignInsWithAudienceEnrichment(FilterRequestId='<guid>')
+//
+// Filter by CorrelationId across a 7-day window:
+// CASignInsWithAudienceEnrichment(LookbackDuration=7d, FilterCorrelationId='<guid>')
+//
+// Filter by user UPN:
+// CASignInsWithAudienceEnrichment(FilterAccountUpn='user@contoso.com')
+//
+// Only sign-ins where "Microsoft Graph" appears as a CA audience:
+// CASignInsWithAudienceEnrichment(FilterAudienceAppDisplayName='Microsoft Graph')
+//
+// Surface sign-ins with unresolved CA audience App IDs (catalog coverage gaps):
+// CASignInsWithAudienceEnrichment(FilterAudienceAppDisplayName='Unknown')
