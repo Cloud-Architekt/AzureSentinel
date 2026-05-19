@@ -124,7 +124,8 @@ EntraIdSignInEvents
     ErrorCode,
     CorrelationId,
     ConditionalAccessStatus,
-    ConditionalAccessPolicies
+    ConditionalAccessPolicies,
+    ClientAppUsed
 | lookup kind=leftouter CAudiences on RequestId
 | where isnotempty(ConditionalAccessAudiences)
 | mv-expand Audience = parse_json(ConditionalAccessAudiences)
@@ -133,7 +134,7 @@ EntraIdSignInEvents
 | lookup ServicePrincipals on $left.AudienceId == $right.AppId
 | extend
     AudienceAppId       = AudienceId,
-    // Fix #3: unresolved App IDs are labelled "Unknown" for explicit tracking
+    // Unresolved App IDs are labelled "Unknown" for explicit tracking
     AudienceDisplayName = coalesce(AppDisplayName1, "Unknown"),
     IsUnknownAudience   = isempty(AppDisplayName1)
 | project-away Audience, ConditionalAccessAudiences, AppDisplayName1
@@ -151,10 +152,10 @@ EntraIdSignInEvents
     AppDisplayName                  = take_any(AppDisplayName),
     ResourceDisplayName             = take_any(ResourceDisplayName),
     // Raw policy array carried forward as a single value (same for all
-    // audience rows in the same request) for mv-apply in Fix #5 below.
     ConditionalAccessPoliciesRaw    = take_any(parse_json(ConditionalAccessPolicies)),
     ConditionalAccessStatus         = take_any(ConditionalAccessStatus),
     ErrorCode                       = take_any(ErrorCode),
+    ClientAppUsed                   = take_any(ClientAppUsed),
     ConditionalAccessAudiences      = make_set(AudienceBag, 100),
     ConditionalAccessAudiencesCount = dcount(AudienceAppId),
     UnknownAudienceCount            = countif(IsUnknownAudience),
@@ -165,15 +166,30 @@ EntraIdSignInEvents
     by AppId, ResourceId, CorrelationId, RequestId
 | mv-apply Policy = ConditionalAccessPoliciesRaw on (
     summarize
-        PolicyOutcomes        = make_set(bag_pack(
+        PolicyOutcomes         = make_set_if(bag_pack(
             "PolicyId",          tostring(Policy.id),
             "PolicyDisplayName", tostring(Policy.displayName),
             "PolicyResult",      tostring(Policy.result),
             "GrantControls",     Policy.enforcedGrantControls,
-            "SessionControls",   Policy.enforcedSessionControls), 50),
-        BlockedPolicyCount    = countif(tostring(Policy.result) == "failure"),
-        NotAppliedPolicyCount = countif(tostring(Policy.result) == "notApplied")
+            "SessionControls",   Policy.enforcedSessionControls),
+            tostring(Policy.result) in ("failure", "applied"), 50),
+        BlockedPolicyCount     = countif(tostring(Policy.result) == "failure"),
+        AppliedPolicyCount     = countif(tostring(Policy.result) == "applied"),
+        NotAppliedPolicyCount  = countif(tostring(Policy.result) == "notApplied"),
+        // Flat sets of controls enforced by policies that succeeded
+        GrantControlsApplied   = make_set_if(Policy.enforcedGrantControls,   tostring(Policy.result) == "applied"),
+        SessionControlsApplied = make_set_if(Policy.enforcedSessionControls, tostring(Policy.result) == "applied"),
+        // Internal counters to derive presence booleans below
+        _SessionControlCount   = countif(array_length(Policy.enforcedSessionControls) > 0),
+        _GrantControlCount     = countif(array_length(Policy.enforcedGrantControls) > 0)
 )
+| extend
+    // True when the client uses a legacy protocol that cannot satisfy modern CA grant controls
+    IsLegacyAuth      = ClientAppUsed in~ ("IMAP", "SMTP", "POP3", "MAPI", "Exchange ActiveSync", "Other clients", "Exchange Web Services", "Autodiscover"),
+    HasBlockedPolicy  = BlockedPolicyCount > 0,
+    HasSessionControl = _SessionControlCount > 0,
+    HasGrantControl   = _GrantControlCount > 0
+| project-away _SessionControlCount, _GrantControlCount
 // --- Final column order -----------------------------------------------------
 | project
     RequestId,
@@ -184,14 +200,22 @@ EntraIdSignInEvents
     ResourceId,
     ResourceDisplayName,
     ErrorCode,
+    ClientAppUsed,
+    IsLegacyAuth,
     ConditionalAccessStatus,
     ConditionalAccessAudiences,
     ConditionalAccessAudiencesCount,
-    ConditionalAccessPoliciesRaw,
     UnknownAudienceCount,
+    ConditionalAccessPoliciesRaw,
     PolicyOutcomes,
     BlockedPolicyCount,
-    NotAppliedPolicyCount
+    AppliedPolicyCount,
+    NotAppliedPolicyCount,
+    HasBlockedPolicy,
+    HasSessionControl,
+    HasGrantControl,
+    GrantControlsApplied,
+    SessionControlsApplied
 }; // end function body  (remove this line when saving as Sentinel function)
 // ===========================================================================
 // Usage examples
