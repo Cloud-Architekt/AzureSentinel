@@ -1,0 +1,754 @@
+// =============================================================================
+// KQL Function: CASignInsWithAudienceEnrichment
+// =============================================================================
+// PURPOSE:
+//   The ConditionalAccessAudiences field in sign-in logs contains raw App IDs
+//   (GUIDs) of every service principal evaluated during Conditional Access.
+//   This function resolves those IDs to human-readable names by combining three
+//   complementary lookup sources, then re-aggregates to one row per sign-in
+//   request and surfaces per-CA-policy outcomes.
+//
+// PARAMETERS (all optional — omit or pass defaults to disable a filter):
+//   LookbackDuration             timespan  How far back to query (default: 1h)
+//   FilterRequestId              string    Restrict to a specific RequestId
+//   FilterCorrelationId          string    Restrict to a specific CorrelationId
+//   FilterAccountUpn             string    Restrict to a specific user UPN
+//   FilterAudienceAppDisplayName        string    Only return sign-ins where this app
+//                                                    name appears as a CA audience.
+//                                                    Pass 'Unknown' to surface sign-ins
+//                                                    with unresolved audience App IDs.
+//   FilterAppId                         string    Restrict to a specific client AppId.
+//                                                    Applied early; useful when
+//                                                    investigating a known app for
+//                                                    bypass or enforcement exposure.
+//   IncludeAllSignInEvents              bool      Default: false — only successful
+//                                                    sign-ins (ErrorCode == 0).
+//                                                    Set true to include failed sign-ins
+//                                                    (e.g. to observe CA-blocked bypass
+//                                                    attempts or HasBlockedPolicy rows).
+//   FilterIsImpactedByEnforcementChange bool      Default: false — all results.
+//                                                    Set true to restrict output to
+//                                                    sign-ins where
+//                                                    IsImpactedByEnforcementChange=true
+//                                                    (all three MS article preconditions
+//                                                    met). Shortcut for enforcement
+//                                                    change impact assessment.
+//   PolicyWithAppExclusionExists        bool      Default: false — detect app/resource
+//                                                    exclusions from sign-in log data
+//                                                    (can produce false negatives; see
+//                                                    comment near HasPolicyWithAppExclusion).
+//                                                    Set true when you know your tenant
+//                                                    has at least one All-resources policy
+//                                                    with a resource exclusion and want to
+//                                                    skip log-based detection entirely.
+//                                                    Forces HasPolicyWithAppExclusion=true
+//                                                    for every row, so
+//                                                    IsImpactedByEnforcementChange is
+//                                                    determined solely by scope content
+//                                                    and client type.
+//   FilterKnownBypassOnly               bool      Default: false — all results.
+//                                                    Set true to restrict output to
+//                                                    sign-ins where MatchedKnownCaBypass
+//                                                    starts with "KnownBypass" (i.e. at
+//                                                    least one audience row matched the
+//                                                    Entrascopes.com bypass catalog).
+//                                                    Shortcut for surfacing active
+//                                                    CA-control bypass candidates.
+//   FilterNoPolicyApplied               bool      Default: false — all results.
+//                                                    Set true to restrict output to
+//                                                    sign-ins where AppliedPolicyCount == 0
+//                                                    (CA evaluated policies but none
+//                                                    reached "applied" or "success" state).
+//                                                    Surfaces sign-ins where enforcement
+//                                                    was suppressed regardless of cause
+//                                                    (bypass, enforcement change, or
+//                                                    policy misconfiguration). Combine
+//                                                    with FilterKnownBypassOnly=true for
+//                                                    highest-confidence bypass findings.
+//
+// LOOKUP PRIORITY (first match wins via union + take_any):
+//   1. Tenant telemetry  – names actually seen in your own interactive and non-interactive sign-in logs
+//   2. EntraScopes       – research result of Fabian Bader and Dirk-jan Mollema about first‑party applications, FOCI membership and associated Conditional Access‑bypassing client‑scope combinations
+//   3. merill/microsoft-info – curated Microsoft first-party app list by Merill Fernando
+//
+// TABLES REQUIRED:
+//   - EntraIdSignInEvents             (Defender XDR / Advanced Hunting)
+//   - SigninLogs                      (Azure Monitor / Sentinel)
+//   - AADNonInteractiveUserSignInLogs (Azure Monitor / Sentinel)
+//     ↳ ConditionalAccessAudiences is absent from the XDR schema; it is
+//       bridged in via a join on RequestId / OriginalRequestId.
+//
+// TO SAVE AS A SENTINEL SAVED FUNCTION:
+//   Uncomment the .create-or-alter block below and run it in Log Analytics.
+// =============================================================================
+
+// CASignInsWithAudienceEnrichment(
+//     LookbackDuration                    : timespan = 1h,
+//     FilterRequestId                     : string   = '',
+//     FilterCorrelationId                 : string   = '',
+//     FilterAccountUpn                    : string   = '',
+//     FilterAudienceAppDisplayName        : string   = '',
+//     FilterAppId                         : string   = '',
+//     IncludeAllSignInEvents              : bool     = false,
+//     FilterIsImpactedByEnforcementChange : bool     = false,
+//     PolicyWithAppExclusionExists        : bool     = false,
+//     FilterKnownBypassOnly               : bool     = false,
+//     FilterNoPolicyApplied               : bool     = false
+// )
+// {
+let CASignInsWithAudienceEnrichment = (
+    LookbackDuration                    : timespan = 1h,
+    FilterRequestId                     : string   = '',
+    FilterCorrelationId                 : string   = '',
+    FilterAccountUpn                    : string   = '',
+    FilterAudienceAppDisplayName        : string   = '',
+    FilterAppId                         : string   = '',
+    IncludeAllSignInEvents              : bool     = false,
+    FilterIsImpactedByEnforcementChange : bool     = false,
+    PolicyWithAppExclusionExists        : bool     = false,
+    FilterKnownBypassOnly               : bool     = false,
+    FilterNoPolicyApplied               : bool     = false
+) {
+// ---------------------------------------------------------------------------
+// Baseline scope definitions (Microsoft Entra "Improved enforcement" rollout)
+//
+// Two authoritative sources define the scope sets — they are consistent on the
+// overall mechanism but differ in how they present the per-client scope lists:
+//
+// Article A — concept-conditional-access-cloud-apps ("Legacy CA behavior" section)
+//   Ref: https://learn.microsoft.com/en-us/entra/identity/conditional-access/concept-conditional-access-cloud-apps#new-conditional-access-behavior-when-an-all-resources-policy-has-a-resource-exclusion
+//   Gives SEPARATE legacy exclusion lists per client type:
+//     Public clients / SPAs  → OIDC + User.Read + People.Read (smaller set)
+//     Confidential clients   → OIDC + full directory set (larger set)
+//
+// Article B — concept-enforcement-resource-exclusions ("What are baseline scopes")
+//   Ref: https://learn.microsoft.com/en-us/entra/identity/conditional-access/concept-enforcement-resource-exclusions
+//   Defines ONE unified "baseline scopes" set (OIDC + full directory set) and
+//   applies it to all client types — matching the confidential-client set from A.
+//
+// DISCREPANCY: Article B's unified definition implicitly treats User.Read.All,
+//   User.ReadBasic.All, People.Read.All, GroupMember.Read.All, Member.Read.Hidden
+//   as baseline for PUBLIC clients too. Article A is explicit that those scopes
+//   were NEVER in the public-client legacy exclusion — meaning a public client
+//   requesting User.Read.All was already subject to CA enforcement before this
+//   change. Using Article B's unified set for public clients would produce false
+//   positives in IsImpactedByEnforcementChange.
+//
+// This KQL follows Article A (more precise legacy exclusion lists) to avoid
+// false positives. Article B is the operational guidance article and aligns for
+// confidential clients; its unified definition appears to be a simplification.
+// ---------------------------------------------------------------------------
+let BaselineScopesOidc           = dynamic(['email','offline_access','openid','profile']);
+let BaselineScopesPublicClient   = dynamic(['email','offline_access','openid','profile','User.Read','People.Read']);
+let BaselineScopesConfidential   = dynamic(['email','offline_access','openid','profile','User.Read','User.Read.All','User.ReadBasic.All','People.Read','People.Read.All','GroupMember.Read.All','Member.Read.Hidden']);
+// Full union — used only where IsConfidentialClient is not yet available (audience mv-expand rows)
+let BaselineScopes               = BaselineScopesConfidential;
+// ---------------------------------------------------------------------------
+// EntraScopes bypass catalog (Fabian Bader / Dirk-jan Mollema)
+// Keyed on (ApplicationId, ResourceId); contains known CA-control bypasses per
+// app/resource pair and the scopes that enable them.
+// ---------------------------------------------------------------------------
+let EntraScopesBypasses =
+    externaldata(AppID: string, ProtectionBypass: string, ResourcesAndScopes: string, CurrentState: string, Description: string)
+    ['https://entrascopes.com/bypasses.json']
+    with(format='singlejson')
+    | mv-expand ResourcesAndScope = parse_json(ResourcesAndScopes)
+    | mv-expand ResourceId = bag_keys(ResourcesAndScope)
+    | extend Scopes = parse_json(ResourcesAndScope[tostring(ResourceId)])
+    | project AppId = tostring(AppID), AudienceId = tostring(ResourceId), Scopes,
+              ProtectionBypass, BypassCurrentState = CurrentState, BypassDescription = Description
+    | mv-expand parse_json(ProtectionBypass)
+    | extend CaControlValue = case(
+        ProtectionBypass == "CompliantDevice", "RequireCompliantDevice",
+        ProtectionBypass == "Multifactor",     "Mfa",
+        tostring(ProtectionBypass))
+    // Flatten the per-bypass Scopes array to individual scope strings so that
+    // KnownBypassAppRoles is a set of strings (not a set of arrays).  Without
+    // this expand, set_intersect(OAuthDelegatedScopeList, KnownBypassAppRoles)
+    // compares strings against arrays and always returns empty, breaking the
+    // KnownBypass classification.
+    | mv-expand Scope = Scopes to typeof(string)
+    | summarize
+        KnownBypassControls  = array_sort_asc(make_set(CaControlValue)),
+        KnownBypassAppRoles  = array_sort_asc(make_set(Scope)),
+        BypassCurrentState   = take_any(BypassCurrentState),
+        BypassDescription    = take_any(BypassDescription)
+        by AppId, AudienceId;
+// ---------------------------------------------------------------------------
+// Sensitive MS Graph permission classification (Cloud-Architekt EntraOps)
+// ---------------------------------------------------------------------------
+let SensitiveMsGraphPermissions =
+    externaldata(EAMTierLevelName: string, Category: string, AppRoleDisplayName: string)
+    ["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_AppRoles.json"]
+    with(format='multijson')
+    | project
+        AppRoleDisplayName,
+        AppRolePermissionTierLevel = tostring(EAMTierLevelName),
+        AppRoleCategory            = tostring(Category);
+// ---------------------------------------------------------------------------
+// Lookup Source 1: Tenant telemetry name cache + seen-resource presence index
+// Both are derived from a single materialized scan of EntraIdSignInEvents so
+// the table is read only once regardless of how many let bindings consume it.
+// ---------------------------------------------------------------------------
+let RawSignins =
+    materialize(
+        EntraIdSignInEvents
+        | where Timestamp > ago(LookbackDuration)
+        | project ApplicationId, Application, ResourceId, ResourceDisplayName
+    );
+// AppId → DisplayName from both the client-app and resource sides
+let SigninAppResource =
+    RawSignins
+    | summarize AppDisplayName = take_any(Application) by AppId = ApplicationId
+    | union
+        (RawSignins
+         | summarize AppDisplayName = take_any(ResourceDisplayName) by AppId = ResourceId);
+// Presence index: which (ClientAppId, AudienceId/ResourceId) pairs have been
+// observed in the tenant within the lookback window.
+// Column names are set to AppId + AudienceId to match the main pipeline keys.
+let SeenResourcesByClient =
+    RawSignins
+    | summarize SeenAsResourceCount = count() by AppId = ApplicationId, AudienceId = ResourceId;
+// ---------------------------------------------------------------------------
+// Lookup Source 2: EntraScopes first-party app catalog
+// ---------------------------------------------------------------------------
+let EntraScopesApps =
+    externaldata(apps: dynamic)['https://entrascopes.com/firstpartyscopes.json']
+    with(format='singlejson')
+    | mv-expand ApplicationId = bag_keys(apps)
+    | extend AppIdStr = tostring(ApplicationId)
+    | extend IsFoci = tobool(apps[AppIdStr]["foci"])
+    | project
+        AppId          = AppIdStr,
+        AppDisplayName = tostring(apps[AppIdStr]["name"]),
+        IsFoci;
+// ---------------------------------------------------------------------------
+// Lookup Source 3: merill/microsoft-info first-party app list
+// App IDs in JSON-Lines format, covering apps not in EntraScopes or telemetry.
+// ---------------------------------------------------------------------------
+let FirstPartyApps =
+    externaldata(AppId: string, AppDisplayName: string, AppOwnerOrganizationId: string, Source: string)
+    ["https://raw.githubusercontent.com/merill/microsoft-info/main/_info/MicrosoftApps.json"]
+    with(format='multijson')
+    | project AppId, AppDisplayName, AppOwnerOrganizationId;
+// ---------------------------------------------------------------------------
+// Unified app-name lookup (Sources 1 → 2 → 3)
+// take_any() picks any non-null value; union source order does not guarantee
+// which source wins for a given AppId.  In practice all sources agree on names
+// for the same AppId.  AppOwnerOrganizationId is contributed exclusively by
+// FirstPartyApps (source 3) since EntraScopesApps and SigninAppResource do
+// not carry that field.
+// IsFoci is sourced exclusively from EntraScopesApps (source 2) via a separate
+// lookup in the main pipeline — it is not included here so FOCI membership is
+// always resolved from the EntraScopes catalog regardless of which source first
+// matched the AppDisplayName.
+// ---------------------------------------------------------------------------
+let ServicePrincipals =
+    union SigninAppResource, EntraScopesApps, FirstPartyApps
+    | where isnotempty(AppId)
+    | summarize
+        AppDisplayName         = take_any(AppDisplayName),
+        AppOwnerOrganizationId = take_any(AppOwnerOrganizationId)
+        by AppId;
+// ---------------------------------------------------------------------------
+// CA audience bridge: pull ConditionalAccessAudiences from Diagnostic Logs
+// This field is absent in the Defender XDR schema (EntraIdSignInEvents) but
+// present in SigninLogs and AADNonInteractiveUserSignInLogs. Only the two
+// columns needed downstream are projected to keep this intermediate set small.
+// ---------------------------------------------------------------------------
+let CAudiences =
+    union SigninLogs, AADNonInteractiveUserSignInLogs
+    | where TimeGenerated > ago(LookbackDuration)
+    | where isnotempty(OriginalRequestId)
+    // Mirror the main pipeline's success filter to reduce bridge scan volume.
+    // ResultType == 0 is the success code in SigninLogs / AADNonInteractiveUserSignInLogs.
+    | where IncludeAllSignInEvents or tolong(ResultType) == 0
+    // Push UPN filter into the bridge to reduce scan volume before mv-expand.
+    // When FilterAccountUpn is empty the filter is a no-op (all rows pass).
+    | where isempty(FilterAccountUpn) or UserPrincipalName =~ FilterAccountUpn
+    // Parse delegated scopes from AuthenticationProcessingDetails and enrich
+    // each scope with its sensitivity classification (EntraOps tier + category).
+    // mv-expand produces one row per scope; summarize collapses back per request.
+    | extend _AuthProc = replace_string(replace_string(AuthenticationProcessingDetails, " ", ""), "\r\n", "")
+    | parse _AuthProc with * "OauthScopeInfo\",\"value\":\"" _OauthScopeRaw "\"}" *
+    | extend _OauthScopeRaw = replace_string(_OauthScopeRaw, '\\', '')
+    | mv-expand _Scope = parse_json(_OauthScopeRaw)
+    | extend _ScopeStr = tostring(_Scope)
+    | lookup kind=leftouter SensitiveMsGraphPermissions on $left._ScopeStr == $right.AppRoleDisplayName
+    | extend _ScopeBag = iff(
+        isnotempty(_ScopeStr),
+        bag_pack(
+            "scope",     _ScopeStr,
+            "tierLevel", coalesce(AppRolePermissionTierLevel, "Unknown"),
+            "category",  coalesce(AppRoleCategory, "Unknown")),
+        dynamic(null))
+    | summarize
+        RequestId                  = take_any(OriginalRequestId),
+        ConditionalAccessAudiences = take_any(ConditionalAccessAudiences),
+        // ClientCredentialType is a native column in SigninLogs (absent from
+        // EntraIdSignInEvents XDR schema) — the authoritative source for
+        // confidential client detection without needing AuthenticationDetails
+        // string parsing.  Values: "clientSecret", "clientCertificate",
+        // "none" (public client), or empty for non-interactive rows.
+        ClientCredentialType       = take_any(ClientCredentialType),
+        // Human-readable description of ErrorCode from the Monitor/Sentinel table
+        ErrorCodeDescription       = take_any(ResultDescription),
+        // Flat scope set for set_intersect comparisons (baseline scope checks).
+        // make_set_if excludes empty strings produced when _OauthScopeRaw is absent;
+        // without this, array_length(OAuthDelegatedScopeList) > 0 fires on a [""]
+        // singleton and IsBaselineScopesOnly / AudienceMatchedKnownCaBypass are wrong.
+        OAuthDelegatedScopeList    = make_set_if(_ScopeStr, isnotempty(_ScopeStr), 200),
+        // Enriched scope bags with sensitivity classification for output.
+        // make_set_if mirrors the OAuthDelegatedScopeList guard for consistency;
+        // make_set already skips nulls, but the explicit predicate documents intent.
+        OAuthDelegatedScopes       = make_set_if(_ScopeBag, isnotempty(_ScopeStr), 200)
+        by OriginalRequestId
+    | project-away OriginalRequestId;
+// ===========================================================================
+// Main query
+// ===========================================================================
+EntraIdSignInEvents
+| where Timestamp > ago(LookbackDuration)
+| where isnotempty(RequestId)
+// --- Optional early filters (reduce scan volume before any joins) -----------
+| where isempty(FilterRequestId)     or RequestId     == FilterRequestId
+| where isempty(FilterCorrelationId) or CorrelationId == FilterCorrelationId
+| where isempty(FilterAccountUpn)    or AccountUpn    =~ FilterAccountUpn
+| where isempty(FilterAppId)         or ApplicationId == FilterAppId
+| where IncludeAllSignInEvents or ErrorCode == 0
+| project
+    AccountUpn,
+    AppDisplayName          = Application,
+    AppId                   = ApplicationId,
+    ResourceDisplayName,
+    ResourceId,
+    RequestId,
+    ErrorCode,
+    CorrelationId,
+    ConditionalAccessStatus,
+    ConditionalAccessPolicies,
+    ClientAppUsed
+| lookup kind=leftouter CAudiences on RequestId
+| where isnotempty(ConditionalAccessAudiences)
+// Derive public vs. confidential client type from the native SigninLogs
+// ClientCredentialType column, bridged in via CAudiences.
+// This is the authoritative source — no AuthenticationDetails string parsing
+// required.  Normalise empty/null (common for non-interactive rows) to "none".
+| extend ClientCredentialType = coalesce(ClientCredentialType, "none")
+| extend IsConfidentialClient = ClientCredentialType !in ("", "none")
+| mv-expand Audience = parse_json(ConditionalAccessAudiences)
+| extend AudienceId = tostring(Audience)
+// Resolve each audience App ID to a display name using the unified lookup
+| lookup ServicePrincipals on $left.AudienceId == $right.AppId
+// Independently enrich IsFoci from EntraScopesApps (source 2) — separate from
+// the display-name lookup so FOCI membership is always resolved from the
+// EntraScopes catalog regardless of which source matched AppDisplayName first.
+| lookup kind=leftouter (EntraScopesApps | project AppId, IsFoci) on $left.AudienceId == $right.AppId
+| extend
+    AudienceAppId            = AudienceId,
+    // Unresolved App IDs are labelled "Unknown" for explicit tracking
+    AudienceDisplayName      = coalesce(AppDisplayName1, "Unknown"),
+    IsUnknownAudience        = isempty(AppDisplayName1),
+    // Owner tenant of the audience app; populated for catalog-matched apps only
+    AudienceAppOwnerTenantId = tostring(AppOwnerOrganizationId),
+    // FOCI (Family of Client IDs) membership for the audience app, if known.
+    AudienceIsFoci           = IsFoci
+| project-away Audience, ConditionalAccessAudiences, AppDisplayName1, AppOwnerOrganizationId, IsFoci
+// Flag whether this audience app has been observed as a resource in sign-ins
+// from the same client app (AppId) within the lookback window.
+| lookup kind=leftouter SeenResourcesByClient on AppId, AudienceId
+| extend IsSeenResourceForClient = isnotempty(SeenAsResourceCount)
+| project-away SeenAsResourceCount
+// Enrich per-audience with known bypass catalog (EntraScopes.com).
+// Two-stage lookup to handle wildcard AppId entries in the catalog:
+//   1. Exact match on (AppId, AudienceId) — client-app-specific bypass entries.
+//   2. Wildcard match on AudienceId only, for catalog entries where AppId = "*".
+//      These entries apply to ANY client app that accesses the given resource.
+//
+// Exact-match bypass data takes priority over wildcard; coalesce is used to fall
+// back to the wildcard columns only when the exact lookup returns null (no match).
+| lookup kind=leftouter EntraScopesBypasses on AppId, AudienceId
+| lookup kind=leftouter (
+    EntraScopesBypasses
+    | where AppId == "*"
+    | project-rename
+        KnownBypassControls_wc = KnownBypassControls,
+        KnownBypassAppRoles_wc = KnownBypassAppRoles,
+        BypassCurrentState_wc  = BypassCurrentState,
+        BypassDescription_wc   = BypassDescription
+    | project-away AppId
+  ) on AudienceId
+| extend
+    KnownBypassControls = coalesce(KnownBypassControls, KnownBypassControls_wc),
+    KnownBypassAppRoles = coalesce(KnownBypassAppRoles, KnownBypassAppRoles_wc),
+    BypassCurrentState  = coalesce(BypassCurrentState,  BypassCurrentState_wc),
+    BypassDescription   = coalesce(BypassDescription,   BypassDescription_wc)
+| project-away KnownBypassControls_wc, KnownBypassAppRoles_wc, BypassCurrentState_wc, BypassDescription_wc
+// Compute bypass classification for this audience entry using the observed
+// delegated scopes for the sign-in (OAuthDelegatedScopeList from the bridge).
+// set_intersect returns scopes that match the known bypass catalog entries.
+//
+// Baseline scope matching uses client-type-specific scope sets per the MS documentation
+// (concept-conditional-access-cloud-apps, "Legacy Conditional Access behavior" section):
+//
+//   Public clients / SPAs   → BaselineScopesPublicClient
+//                             (OIDC + User.Read + People.Read — smaller set)
+//   Confidential clients    → BaselineScopesConfidential
+//                             (OIDC + full directory set incl. User.Read.All etc.)
+//
+// At the audience mv-expand stage IsConfidentialClient is already resolved from
+// ClientCredentialType (bridged in via CAudiences), so the correct per-client set
+// is used here.  The full BaselineScopes union is retained as a let binding for
+// any future uses where client type is unavailable.
+//
+| extend _MatchedBypassRoles   = set_intersect(OAuthDelegatedScopeList, KnownBypassAppRoles)
+// _MatchedByDesign uses the client-type-specific baseline scope set so that scopes
+// exclusive to the confidential-client list (e.g. User.Read.All) are not incorrectly
+// treated as baseline for public clients.
+| extend _MatchedByDesign      = iff(
+    IsConfidentialClient,
+    set_intersect(OAuthDelegatedScopeList, BaselineScopesConfidential),
+    set_intersect(OAuthDelegatedScopeList, BaselineScopesPublicClient))
+| extend AudienceMatchedKnownCaBypass = case(
+    // Every requested scope is in the Entrascopes.com bypass catalog for this
+    // (AppId, AudienceId) pair — the sign-in exclusively uses known bypass scopes.
+    array_length(OAuthDelegatedScopeList) > 0
+        and array_length(OAuthDelegatedScopeList) == array_length(_MatchedBypassRoles),
+        "KnownBypass - all scopes match Entrascopes.com catalog",
+    // Some (but not all) requested scopes match the bypass catalog.
+    array_length(_MatchedBypassRoles) > 0,
+        "KnownBypass - partial scope match with Entrascopes.com catalog",
+    // ALL scopes are baseline scopes per the MS enforcement change article.
+    // Whether this sign-in is actually impacted depends also on client type and
+    // whether a matching All-resources policy with exclusion exists; see
+    // IsImpactedByEnforcementChange for the full three-condition evaluation.
+    array_length(OAuthDelegatedScopeList) > 0
+        and array_length(OAuthDelegatedScopeList) == array_length(_MatchedByDesign),
+        "EnforcementChange - baseline scopes only",
+    // Some baseline scopes present but non-baseline scopes also requested.
+    // Non-baseline scopes are already subject to CA enforcement — this sign-in
+    // is NOT in scope of the MS enforcement change.
+    array_length(_MatchedByDesign) > 0,
+        "Informational - includes baseline scopes, non-baseline scopes CA-covered",
+    array_length(OAuthDelegatedScopeList) == 0,
+        "NoScopes - no delegated scopes observed",
+    // A bypass catalog entry exists for this (AppId, AudienceId) pair in the
+    // Entrascopes.com catalog but the delegated scopes used in this sign-in do
+    // not match the catalog's bypass scope list. The bypass technique is known
+    // for this resource but was not triggered by this specific sign-in.
+    // By the time execution reaches here OAuthDelegatedScopeList is guaranteed
+    // non-empty (the array_length == 0 case above already handled the empty case).
+    array_length(KnownBypassAppRoles) > 0,
+        "CatalogMatch - bypass entry in Entrascopes.com catalog for this resource; requested scopes do not match bypass pattern",
+    "NoMatch - scopes present but no bypass pattern found"
+)
+| project-away _MatchedBypassRoles, _MatchedByDesign
+// Assign a numeric priority so the most significant bypass classification
+// across all expanded audience rows can be surfaced at application level.
+// The max() of this column is aggregated in the summarize below.
+| extend _BypassPriority = case(
+    AudienceMatchedKnownCaBypass startswith "KnownBypass - all",     5,
+    AudienceMatchedKnownCaBypass startswith "KnownBypass - partial", 4,
+    AudienceMatchedKnownCaBypass startswith "EnforcementChange",     3,
+    AudienceMatchedKnownCaBypass startswith "Informational",         2,
+    AudienceMatchedKnownCaBypass startswith "CatalogMatch",          1,
+    0)
+// Pack each resolved audience into a property bag for the final aggregation.
+// AudienceMatchedKnownCaBypass is included so per-audience classification is
+// visible in the nested output, alongside the application-scoped
+// MatchedKnownCaBypass column derived from the worst-case priority below.
+| extend AudienceBag = bag_pack(
+    "AudienceAppId",               AudienceAppId,
+    "AudienceDisplayName",         AudienceDisplayName,
+    "AudienceAppOwnerTenantId",    AudienceAppOwnerTenantId,
+    "AudienceIsFoci",              AudienceIsFoci,
+    "IsUnknownAudience",           IsUnknownAudience,
+    "IsSeenResourceForClient",     IsSeenResourceForClient,
+    "AudienceMatchedKnownCaBypass",  AudienceMatchedKnownCaBypass)
+// --- Re-aggregate: collapse back to one row per sign-in request -------------
+// TargetAudienceMatchCount counts how many expanded audience rows match the
+// optional FilterAudienceAppDisplayName; used for post-aggregate filtering.
+| summarize
+    AccountUpn                      = take_any(AccountUpn),
+    AppDisplayName                  = take_any(AppDisplayName),
+    ResourceDisplayName             = take_any(ResourceDisplayName),
+    // Raw policy array carried forward as a single value (same for all
+    ConditionalAccessPoliciesRaw    = take_any(parse_json(ConditionalAccessPolicies)),
+    ConditionalAccessStatus         = take_any(ConditionalAccessStatus),
+    ErrorCode                       = take_any(ErrorCode),
+    ErrorCodeDescription            = take_any(ErrorCodeDescription),
+    ClientAppUsed                   = take_any(ClientAppUsed),
+    IsConfidentialClient            = take_any(IsConfidentialClient),
+    ClientCredentialType            = take_any(ClientCredentialType),
+    OAuthDelegatedScopes            = take_any(OAuthDelegatedScopes),
+    OAuthDelegatedScopeList         = take_any(OAuthDelegatedScopeList),
+    ConditionalAccessAudiences      = make_set(AudienceBag, 100),
+    ConditionalAccessAudiencesCount = dcount(AudienceAppId),
+    UnknownAudienceCount            = countif(IsUnknownAudience),
+    // Bypass fields aggregated at application scope across all audience rows.
+    // make_set captures all matched controls/states; max captures worst-case
+    // bypass classification level for deriving MatchedKnownCaBypass below.
+    CaBypassControls                = make_set(KnownBypassControls),
+    CaBypassCurrentState            = make_set(BypassCurrentState),
+    CaBypassDescription             = make_set(BypassDescription),
+    _MaxBypassPriority              = max(_BypassPriority),
+    // Internal counter used for audience display-name filtering below.
+    TargetAudienceMatchCount        = countif(
+        isempty(FilterAudienceAppDisplayName)
+        or AudienceDisplayName =~ FilterAudienceAppDisplayName)
+    by AppId, ResourceId, CorrelationId, RequestId
+// Apply FilterAudienceAppDisplayName: drop rows where no expanded audience row
+// matched the requested name.  When the filter is empty every row has count > 0.
+| where TargetAudienceMatchCount > 0
+| project-away TargetAudienceMatchCount
+// Resolve the owner tenant of the client app (AppId) from the first-party
+// catalog. Uses FirstPartyApps directly to avoid column name collisions with
+// the AppDisplayName already in the pipeline.
+| lookup kind=leftouter (FirstPartyApps | project AppId, AppOwnerOrganizationId) on AppId
+| extend AppOwnerTenantId = tostring(AppOwnerOrganizationId)
+| project-away AppOwnerOrganizationId
+// Derive application-scoped bypass classification from the worst-case priority
+// score collected across all expanded audience rows in the summarize above.
+| extend MatchedKnownCaBypass = case(
+    _MaxBypassPriority == 5, "KnownBypass - all scopes match Entrascopes.com catalog",
+    _MaxBypassPriority == 4, "KnownBypass - partial scope match with Entrascopes.com catalog",
+    _MaxBypassPriority == 3, "EnforcementChange - baseline scopes only",
+    _MaxBypassPriority == 2, "Informational - includes baseline scopes, non-baseline scopes CA-covered",
+    _MaxBypassPriority == 1, "CatalogMatch - bypass entry in Entrascopes.com catalog for this resource; requested scopes do not match bypass pattern",
+    "NoMatch")
+| project-away _MaxBypassPriority
+| extend ConditionalAccessPoliciesRaw = iff(
+    isnull(ConditionalAccessPoliciesRaw) or array_length(ConditionalAccessPoliciesRaw) == 0,
+    dynamic([{}]),
+    ConditionalAccessPoliciesRaw)
+| mv-apply Policy = ConditionalAccessPoliciesRaw on (
+    summarize
+        // PolicyOutcomes captures two categories:
+        //   1. Policies with result "applied" or "failure" — the normal case where CA
+        //      evaluated and enforced (or blocked) the sign-in.
+        //   2. Policies with result "notApplied" where includeRulesSatisfied contains
+        //      "allApps" AND excludeRulesSatisfied contains "application" — the
+        //      enforcement change scenario.  In this case ALL policies return notApplied
+        //      because the baseline scope bypass suppresses enforcement.  Without this
+        //      second predicate, PolicyOutcomes is always empty for those sign-ins even
+        //      though ConditionalAccessPoliciesRaw contains the relevant policy entries.
+        PolicyOutcomes         = make_set_if(bag_pack(
+            "PolicyId",                  tostring(Policy.id),
+            "PolicyDisplayName",         tostring(Policy.displayName),
+            "PolicyResult",              tostring(Policy.result),
+            "GrantControls",             Policy.enforcedGrantControls,
+            "SessionControls",           Policy.enforcedSessionControls,
+            "IncludeRulesSatisfied",     Policy.includeRulesSatisfied,
+            "ExcludeRulesSatisfied",     Policy.excludeRulesSatisfied),
+            tostring(Policy.result) in ("failure", "applied", "success")
+            or (
+                tostring(Policy.result) == "notApplied"
+                and set_has_element(Policy.includeRulesSatisfied, "allApps")
+                and set_has_element(Policy.excludeRulesSatisfied, "application")
+            ), 50),
+        BlockedPolicyCount     = countif(tostring(Policy.result) == "failure"),
+        AppliedPolicyCount     = countif(tostring(Policy.result) in ("applied", "success")),
+        NotAppliedPolicyCount  = countif(tostring(Policy.result) == "notApplied"),
+        // Flat sets of controls enforced by policies that succeeded
+        GrantControlsApplied   = make_set_if(Policy.enforcedGrantControls,   tostring(Policy.result) in ("applied", "success")),
+        SessionControlsApplied = make_set_if(Policy.enforcedSessionControls, tostring(Policy.result) in ("applied", "success")),
+        // Internal counters to derive presence booleans below
+        // Scoped to applied/failure only so Has* booleans reflect enforced policies
+        _SessionControlCount          = countif(
+            tostring(Policy.result) in ("applied", "success", "failure")
+            and array_length(Policy.enforcedSessionControls) > 0),
+        _GrantControlCount            = countif(
+            tostring(Policy.result) in ("applied", "success", "failure")
+            and array_length(Policy.enforcedGrantControls) > 0),
+        // Condition 2 of the MS enforcement article: at least one policy was NOT
+        // applied because an application/resource exclusion rule was satisfied.
+        // set_has_element checks the dynamic excludeRulesSatisfied array on each
+        // evaluated policy entry.  "application" covers both client-app exclusions
+        // and resource/target exclusions (both are represented as app objects in CA).
+        //
+        // Condition 1 of the MS enforcement article: the policy targeted All resources.
+        // includeRulesSatisfied contains "allApps" when the policy's include scope
+        // was "All resources" (as opposed to explicitly enumerated app IDs).
+        //
+        // Both conditions are required on the SAME policy row — a separate policy
+        // that happens to target All resources without an exclusion is not the
+        // scenario described in the article.
+        _AllResourcesWithExclusionCount = countif(
+            tostring(Policy.result) == "notApplied"
+            and set_has_element(Policy.includeRulesSatisfied, "allApps")
+            and set_has_element(Policy.excludeRulesSatisfied, "application"))
+)
+| extend
+    // True when the client uses a legacy protocol that cannot satisfy modern CA grant controls
+    IsLegacyAuth              = ClientAppUsed in~ ("IMAP", "SMTP", "POP3", "MAPI", "Exchange ActiveSync", "Other clients", "Exchange Web Services", "Autodiscover"),
+    HasBlockedPolicy          = BlockedPolicyCount > 0,
+    HasSessionControl         = _SessionControlCount > 0,
+    HasGrantControl           = _GrantControlCount > 0,
+    // True when at least one evaluated policy shows notApplied due to an app/resource
+    // exclusion rule on a policy that targets All resources.  Covers BOTH conditions
+    // (1) and (2) of the MS enforcement article preconditions on a single policy row.
+    //
+    // ACCURACY NOTE: Log-based detection of app/resource exclusions can produce false
+    // negatives. The sign-in log only records the policy result for the evaluated
+    // sign-in — a policy with an exclusion is only visible here as notApplied with
+    // excludeRulesSatisfied="application" when the excluded resource is actually
+    // requested in that specific sign-in. If a tenant's All-resources policy with a
+    // resource exclusion is never triggered by the observed sign-ins in the lookback
+    // window (e.g. the excluded app is not accessed), HasPolicyWithAppExclusion will
+    // be false even though the policy condition exists. Use PolicyWithAppExclusionExists=true
+    // to override when you have confirmed via the CA policy configuration that such
+    // a policy exists in the tenant.
+    HasPolicyWithAppExclusion = PolicyWithAppExclusionExists or _AllResourcesWithExclusionCount > 0
+| project-away _SessionControlCount, _GrantControlCount, _AllResourcesWithExclusionCount
+// --- Baseline scope enforcement change assessment ---------------------------
+// Ref: https://learn.microsoft.com/en-us/entra/identity/conditional-access/concept-enforcement-resource-exclusions
+//
+// Microsoft article "Who is affected" defines THREE preconditions that must ALL
+// be true for a tenant to be affected:
+//   (1) One or more CA policies target All resources.
+//   (2) Those policies have one or more resource exclusions.
+//   (3) Users sign in through applications requesting only baseline scopes.
+//
+// This query covers all three via sign-in log data:
+//   (1) HasPolicyWithAppExclusion (partial): includeRulesSatisfied contains
+//       "allApps" on the notApplied policy row — the policy targeted All resources.
+//   (2) HasPolicyWithAppExclusion (partial): excludeRulesSatisfied contains
+//       "application" on the same notApplied policy row — a resource/app exclusion
+//       fired.  Both (1) and (2) are evaluated together on the same policy entry,
+//       so HasPolicyWithAppExclusion is true only when a single policy satisfies
+//       both conditions simultaneously.
+//   (3) IsBaselineScopesOnly: all requested delegated scopes are within the
+//       Microsoft-defined baseline set.
+//
+// IsOidcScopesOnly: scopes are exclusively OIDC — confidential clients in this
+//   state are NOT affected by the rollout because CA was already enforced for
+//   confidential clients requesting an ID token (openid scope) before this change
+//   (docs: "Conditional Access applies to the confidential client itself if it
+//   requests an ID token").  This is not an additional exemption — it reflects
+//   pre-existing enforcement that makes the change a no-op for that path.
+// IsBaselineScopesOnly: evaluated against the client-type-specific scope set so
+//   that scopes in the confidential-client baseline but NOT the public-client
+//   baseline (e.g. User.Read.All) do not generate false positives for public clients.
+// IsImpactedByEnforcementChange: all three preconditions met AND the client type
+//   is not in the exempted category:
+//   - Public client with any baseline scopes (OIDC or directory per public set), OR
+//   - Confidential client with at least one baseline scope (excl. OIDC-only).
+| extend _BaselineIntersect = iff(
+    IsConfidentialClient,
+    set_intersect(OAuthDelegatedScopeList, BaselineScopesConfidential),
+    set_intersect(OAuthDelegatedScopeList, BaselineScopesPublicClient))
+| extend _OidcIntersect     = set_intersect(OAuthDelegatedScopeList, BaselineScopesOidc)
+| extend IsBaselineScopesOnly = array_length(OAuthDelegatedScopeList) > 0
+    and array_length(OAuthDelegatedScopeList) == array_length(_BaselineIntersect)
+| extend IsOidcScopesOnly = array_length(OAuthDelegatedScopeList) > 0
+    and array_length(OAuthDelegatedScopeList) == array_length(_OidcIntersect)
+// Confidential clients using only OIDC scopes → no change expected (per article).
+// Require HasPolicyWithAppExclusion to confirm condition (2) is met in log data.
+| extend IsImpactedByEnforcementChange = IsBaselineScopesOnly
+    and HasPolicyWithAppExclusion
+    and not (IsConfidentialClient and IsOidcScopesOnly)
+// Optional post-calculation filter: restrict to enforcement-change-impacted sign-ins.
+// When false (default) all sign-ins pass; when true only IsImpactedByEnforcementChange
+// rows are returned — shortcut for enforcement change impact assessment.
+| where not(FilterIsImpactedByEnforcementChange) or IsImpactedByEnforcementChange
+// Optional post-calculation filter: restrict to sign-ins with a known CA-control bypass.
+// When false (default) all sign-ins pass; when true only rows where MatchedKnownCaBypass
+// starts with "KnownBypass" are returned (full or partial scope match against the
+// Entrascopes.com bypass catalog).
+| where not(FilterKnownBypassOnly) or MatchedKnownCaBypass startswith "KnownBypass"
+// Optional post-calculation filter: restrict to sign-ins where no CA policy reached
+// "applied" or "success" state. When false (default) all sign-ins pass; when true
+// only AppliedPolicyCount == 0 rows are returned — surfaces sign-ins where CA
+// enforcement was suppressed regardless of cause. Combine with FilterKnownBypassOnly
+// or FilterIsImpactedByEnforcementChange to correlate unenforced sign-ins with a
+// specific bypass or enforcement-change pattern.
+| where not(FilterNoPolicyApplied) or AppliedPolicyCount == 0
+| project-away _BaselineIntersect, _OidcIntersect
+// --- Final column order -----------------------------------------------------
+| project
+    RequestId,
+    CorrelationId,
+    AccountUpn,
+    AppId,
+    AppDisplayName,
+    AppOwnerTenantId,
+    ResourceId,
+    ResourceDisplayName,
+    ErrorCode,
+    ErrorCodeDescription,
+    ClientAppUsed,
+    IsLegacyAuth,
+    IsConfidentialClient,
+    ClientCredentialType,
+    IsBaselineScopesOnly,
+    IsOidcScopesOnly,
+    HasPolicyWithAppExclusion,
+    IsImpactedByEnforcementChange,
+    OAuthDelegatedScopes,
+    MatchedKnownCaBypass,
+    CaBypassControls,
+    CaBypassCurrentState,
+    CaBypassDescription,
+    ConditionalAccessStatus,
+    ConditionalAccessAudiences,
+    ConditionalAccessAudiencesCount,
+    UnknownAudienceCount,
+    ConditionalAccessPoliciesRaw,
+    PolicyOutcomes,
+    BlockedPolicyCount,
+    AppliedPolicyCount,
+    NotAppliedPolicyCount,
+    HasBlockedPolicy,
+    HasSessionControl,
+    HasGrantControl,
+    GrantControlsApplied,
+    SessionControlsApplied
+}; // end function body  (remove this line when saving as Sentinel function)
+// ===========================================================================
+// Usage examples
+// ===========================================================================
+// All sign-ins for the last 1 hours (no filters):
+CASignInsWithAudienceEnrichment
+//
+// Filter by specific RequestId:
+// CASignInsWithAudienceEnrichment(FilterRequestId='<guid>')
+//
+// Filter by CorrelationId across a 7-day window:
+// CASignInsWithAudienceEnrichment(LookbackDuration=7d, FilterCorrelationId='<guid>')
+//
+// Filter by user UPN:
+// CASignInsWithAudienceEnrichment(FilterAccountUpn='user@contoso.com')
+//
+// Only sign-ins where "Microsoft Graph" appears as a CA audience:
+// CASignInsWithAudienceEnrichment(FilterAudienceAppDisplayName='Microsoft Graph')
+//
+// Surface sign-ins with unresolved CA audience App IDs (catalog coverage gaps):
+// CASignInsWithAudienceEnrichment(FilterAudienceAppDisplayName='Unknown')
+//
+// Restrict to a specific client application:
+// CASignInsWithAudienceEnrichment(FilterAppId='<appId-guid>')
+//
+// Show only sign-ins impacted by the Microsoft CA enforcement change
+// (baseline scopes only + All-resources policy with resource exclusion):
+// CASignInsWithAudienceEnrichment(FilterIsImpactedByEnforcementChange=true)
+//
+// Include failed sign-ins to observe CA-blocked bypass attempts:
+// CASignInsWithAudienceEnrichment(IncludeAllSignInEvents=true)
+//
+// Enforcement change impact over 7 days including failed sign-ins:
+// CASignInsWithAudienceEnrichment(LookbackDuration=7d, FilterIsImpactedByEnforcementChange=true, IncludeAllSignInEvents=true)
+//
+// Only sign-ins matching a known CA-control bypass from Entrascopes.com catalog:
+// CASignInsWithAudienceEnrichment(FilterKnownBypassOnly=true)
+//
+// Known bypasses over 7 days including failed sign-ins:
+// CASignInsWithAudienceEnrichment(LookbackDuration=7d, FilterKnownBypassOnly=true, IncludeAllSignInEvents=true)
+//
+// Sign-ins where no CA policy was applied (enforcement suppressed for any reason):
+// CASignInsWithAudienceEnrichment(FilterNoPolicyApplied=true)
+//
+// Highest-confidence bypass findings: no policy applied AND scopes match bypass catalog:
+// CASignInsWithAudienceEnrichment(FilterNoPolicyApplied=true, FilterKnownBypassOnly=true)
+//
+// No policy applied over 7 days, including failed sign-ins:
+// CASignInsWithAudienceEnrichment(LookbackDuration=7d, FilterNoPolicyApplied=true, IncludeAllSignInEvents=true)
