@@ -26,7 +26,7 @@ union SigninLogs, AADNonInteractiveUserSignInLogs
 // Correlate token acquisition with NetworkAccessTraffic logs from GSA
 | join kind = leftouter ( NetworkAccessTraffic
     | project TimeGenerated, TransactionId, ConnectionId, IPAddress = SourceIp, AgentVersion, UserId, DeviceId, UniqueTokenIdentifier = UniqueTokenId, InitiatingProcessName
-) on UserId, DeviceId, UniqueTokenIdentifier, IPAddress
+) on UniqueTokenIdentifier, IPAddress
 // Summarize Results
 | extend ResultType = toint(ResultType)
 | project-reorder CreatedDateTime, SessionId, IncomingTokenType, TokenIssuerType, SignInSessionStatus, UniqueTokenIdentifier, AppDisplayName, ResourceDisplayName, IsThroughGlobalSecureAccess, InitiatingProcessName

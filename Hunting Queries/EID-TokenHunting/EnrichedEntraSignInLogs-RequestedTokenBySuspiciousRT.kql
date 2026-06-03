@@ -43,7 +43,7 @@ union SigninLogs, AADNonInteractiveUserSignInLogs
         UniqueTokenIdentifier = UniqueTokenId,
         InitiatingProcessName
     )
-    on UserId, DeviceId, UniqueTokenIdentifier, IPAddress
+    on UniqueTokenIdentifier, IPAddress
 | extend TokenAcquiredThroughGsa = iff((isnotempty(ConnectionId)), "true", "false")
 // Lookup for Error Code
 | join kind=leftouter (ErrorCodes) on ResultType
@@ -105,7 +105,7 @@ union SigninLogs, AADNonInteractiveUserSignInLogs
         DeviceId,
         UniqueTokenIdentifier = UniqueTokenId,
         InitiatingProcessName
-) on UserId, DeviceId, UniqueTokenIdentifier, IPAddress
+) on UniqueTokenIdentifier, IPAddress
 | extend IsOutsideOfGsa = "true"
 | project UserPrincipalName, StolenTimestamp, StolenTokenType, StolenTokenApp, StolenTokenIsFoci, StolenTokenStatus, StolenTokenProcessName, SessionId, SignInTime = CreatedDateTime, AppDisplayName, ResourceDisplayName, SignInSessionStatus, IsFoci, IsOutsideOfGsa, UniqueTokenIdentifier, ErrorCode, ResultErrorDescription
 | sort by SignInTime asc
