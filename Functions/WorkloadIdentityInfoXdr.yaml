@@ -261,4 +261,4 @@ FunctionQuery: |
       | project-away _TierScore, _CriticalityScore, _PrivilegeLevelScore
       | project Timestamp, TimeGenerated, ServicePrincipalName, ServicePrincipalId, OAuthAppId, EntraOpsInvestigationScore, RiskScore, RiskLevel, RiskState, RiskDetail, CriticalityLevel, PrivilegeTierLevel, PrivilegeLevel, PrivilegeCategories, AddedOnTime, LastModifiedTime, AppStatus, VerifiedPublisher, IsAdminConsented, AppOrigin, AppOwnerTenantId, IsFirstPartyApp, ApiPermissions, AssignedAzureRoles, AssignedEntraRoles, AssignedGroupMembership, AuthenticatedBy, OwnedBy
       };
-  WorkloadIdentityInfoXdr(ServicePrincipalName, ServicePrincipalObjectId=)
+  WorkloadIdentityInfoXdr(ServicePrincipalName, ServicePrincipalObjectId)
