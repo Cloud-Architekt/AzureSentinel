@@ -1,5 +1,5 @@
 // Get a list of first party apps with activity to Microsoft Graph and enriched classification
-let SensitiveMsGraphPermissions = externaldata(AppId: guid, AppRoleId: guid, AppRoleDisplayName: string, Category: string, EAMTierLevelName: string, EAMTierLevelTagValue: string)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_AppRoles.json"] with (format='multijson')
+let SensitiveMsGraphPermissions = externaldata(AppId: guid, AppRoleId: guid, AppRoleDisplayName: string, Category: string, EAMTierLevelName: string, EAMTierLevelTagValue: string)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_MsGraphAppRoles.json"] with (format='multijson')
     | where isnotempty(EAMTierLevelName)
     // Optional: Filtering for Control Plane only
     //| where EAMTierLevelName == "ControlPlane"    

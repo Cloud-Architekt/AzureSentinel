@@ -1,8 +1,8 @@
   // Added Sensitive API Permissions from unprivileged user
   // Modified version from "Admin promotion after Role Management Application Permission Grant" (f80d951a-eddc-4171-b9d0-d616bb83efdc) and "Service Principal Assigned App Role With Sensitive Access" (dd78a122-d377-415a-afe9-f22e08d2112c)
-  let SensitiveMsGraphPermissions = externaldata(EAMTierLevelName: string, Category: string, AppRoleDisplayName: string)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_AppRoles.json"] with(format='multijson');
+  let SensitiveMsGraphPermissions = externaldata(EAMTierLevelName: string, Category: string, AppRoleDisplayName: string)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_MsGraphAppRoles.json"] with(format='multijson');
   AuditLogs
-  | where TimeGenerated >ago(365d)
+  | where TimeGenerated >ago(30d)
   | where LoggedByService =~ "Core Directory"
   | where Category =~ "ApplicationManagement"
   | where AADOperationType =~ "Assign"  

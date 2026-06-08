@@ -1,4 +1,9 @@
-let SensitiveMsGraphPermissions = externaldata(EAMTierLevelName: string, Category: string, AppRoleDisplayName: string)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_AppRoles.json"] with(format='multijson');
+let SensitiveMsGraphPermissions = externaldata(
+    EAMTierLevelName: string,
+    Category: string,
+    ScopeDisplayName: string
+    ) [@"https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/refs/heads/tnh-EnhancedApiSupport/Classification/Classification_MsGraphScopes.json"] with (format="multijson")
+    |;
 let SignInsWithDelegatedScope = union SigninLogs, AADNonInteractiveUserSignInLogs
 | where ResourceDisplayName == "Microsoft Graph"
 // Enrichment of CAE, OAuthScope and Token Binding
@@ -23,14 +28,14 @@ let SignInsWithDelegatedScope = union SigninLogs, AADNonInteractiveUserSignInLog
 | project TimeGenerated = CreatedDateTime, CorrelationId, UserPrincipalName, RiskLevelDuringSignIn, RiskState, AppDisplayName, ResourceDisplayName, tostring(OAuthDelegatedScope), AuthenticationMethod, AuthenticationDetail, DeviceName, DeviceOS, DeviceTrust, DeviceCompliance, IncomingTokenType, IsCaeToken, SignInSessionStatus;
 SignInsWithDelegatedScope
 | mv-expand parse_json(OAuthDelegatedScope)
-| extend AppRoleDisplayName = tostring(OAuthDelegatedScope)   
+| extend ScopeDisplayName = tostring(OAuthDelegatedScope)   
 | join kind=leftouter(
-        SensitiveMsGraphPermissions | project AppRolePermissionTierLevel = tostring(EAMTierLevelName), tostring(Category), tostring(AppRoleDisplayName)
-        ) on AppRoleDisplayName
-| where isnotempty(AppRoleDisplayName)
-| extend AppRolePermissionTierLevel = iff(isnotempty(AppRolePermissionTierLevel), AppRolePermissionTierLevel, "Unclassified")
+        SensitiveMsGraphPermissions | project ScopePermissionTierLevel = tostring(EAMTierLevelName), tostring(Category), tostring(ScopeDisplayName)
+        ) on ScopeDisplayName
+| where isnotempty(ScopeDisplayName)
+| extend ScopePermissionTierLevel = iff(isnotempty(ScopePermissionTierLevel), ScopePermissionTierLevel, "Unclassified")
 | sort by TimeGenerated
-| extend AppRolePermissionDetails = bag_pack_columns(AppRoleDisplayName, AppRolePermissionTierLevel)
+| extend ScopePermissionDetails = bag_pack_columns(ScopeDisplayName, ScopePermissionTierLevel)
 // Optional: Filter sign-ins with delegated permissions on Control Plane
-//| where AppRolePermissionTierLevel == "ControlPlane"
-| summarize AppRolePermissions = make_set(AppRolePermissionDetails), AppRolePermissionTierLevels = array_sort_asc(make_set(AppRolePermissionTierLevel)) by TimeGenerated, CorrelationId, UserPrincipalName, RiskLevelDuringSignIn, RiskState, AppDisplayName, ResourceDisplayName, AuthenticationMethod, AuthenticationDetail, DeviceName, DeviceOS, DeviceTrust, DeviceCompliance, IncomingTokenType, IsCaeToken, SignInSessionStatus
+//| where ScopePermissionTierLevel == "ControlPlane"
+| summarize ScopePermissions = make_set(ScopePermissionDetails), ScopePermissionTierLevels = array_sort_asc(make_set(ScopePermissionTierLevel)) by TimeGenerated, CorrelationId, UserPrincipalName, RiskLevelDuringSignIn, RiskState, AppDisplayName, ResourceDisplayName, AuthenticationMethod, AuthenticationDetail, DeviceName, DeviceOS, DeviceTrust, DeviceCompliance, IncomingTokenType, IsCaeToken, SignInSessionStatus

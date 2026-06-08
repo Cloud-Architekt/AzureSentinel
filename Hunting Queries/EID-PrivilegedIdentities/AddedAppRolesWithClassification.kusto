@@ -1,6 +1,6 @@
 // Added API Permissions with enriched classification from EntraOps Privileged EAM
 // Modified version from "Admin promotion after Role Management Application Permission Grant" (f80d951a-eddc-4171-b9d0-d616bb83efdc) and "Service Principal Assigned App Role With Sensitive Access" (dd78a122-d377-415a-afe9-f22e08d2112c) from Microsoft Sentinel Repo
-let SensitiveMsGraphPermissions = externaldata(AppRoleDisplayName: string, AppRoleId: string, AppId: string, EAMTierLevelName: string, Category: string)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_AppRoles.json"] with(format='multijson');
+let SensitiveMsGraphPermissions = externaldata(AppRoleDisplayName: string, AppRoleId: string, AppId: string, EAMTierLevelName: string, Category: string)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_MsGraphAppRoles.json"] with(format='multijson');
 AuditLogs
 | where TimeGenerated >ago(90d)
 | where LoggedByService =~ "Core Directory"
