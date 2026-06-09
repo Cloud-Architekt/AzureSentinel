@@ -145,8 +145,8 @@ FunctionQuery: |
                 | join kind = leftouter (
                     SensitiveApiPermissions
                 ) on PermissionValue, PermissionType, TargetAppId
-                //| project-rename Classification = EAMTierLevelName
-                | extend ApiPermission = bag_pack_columns(PermissionId, PermissionValue, PermissionType, TargetAppId, TargetAppDisplayName, InUse, PrivilegeLevel, Category, EAMTierLevelName)
+                | project-rename Classification = EAMTierLevelName
+                | extend ApiPermission = bag_pack_columns(PermissionId, PermissionValue, PermissionType, TargetAppId, TargetAppDisplayName, InUse, PrivilegeLevel, Category, Classification)
                 | summarize ApiPermissions = make_set(ApiPermission) by ServicePrincipalId
         ) on ServicePrincipalId
         | project-away Permissions
