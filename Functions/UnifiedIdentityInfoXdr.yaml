@@ -289,7 +289,7 @@ FunctionQuery: |
         )    
         | sort by OAuthAppId    
     };
-    let UnifiedIdentityInfoXdrV4 = (ObjectName:string, ObjectId:guid, LookbackTimestamp:datetime=datetime(now)) {
+    let UnifiedIdentityInfoXdr = (ObjectName:string, ObjectId:guid, LookbackTimestamp:datetime=datetime(now)) {
         let PrivilegedUsers = Int_PrivilegedIdentityInfo(UserPrincipalName=tolower(ObjectName),ObjectId=tostring(ObjectId))
         | where TimeGenerated > ago(14d)
         | where Type == "User"
@@ -373,4 +373,4 @@ FunctionQuery: |
         | project-reorder AccountObjectId, AccountDisplayName, AccountStatus, Type, CriticalityLevel, CriticalAssetDetails, Classification, AssignedAzureRoles, AssignedEntraRoles, ApiPermissions, AssociatedPrimaryAccount;
     };
     // Lookback feature is limited to user identities only
-    UnifiedIdentityInfoXdrV4(ObjectName="",ObjectId="",LookbackTimestamp=datetime(now))
+    UnifiedIdentityInfoXdr(ObjectName="",ObjectId="",LookbackTimestamp=datetime(now))
