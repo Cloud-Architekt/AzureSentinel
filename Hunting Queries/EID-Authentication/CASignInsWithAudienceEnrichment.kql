@@ -163,28 +163,26 @@ let EntraScopesBypasses =
         ProtectionBypass == "Multifactor",     "Mfa",
         tostring(ProtectionBypass))
     // Flatten the per-bypass Scopes array to individual scope strings so that
-    // KnownBypassAppRoles is a set of strings (not a set of arrays).  Without
-    // this expand, set_intersect(OAuthDelegatedScopeList, KnownBypassAppRoles)
+    // KnownBypassScopes is a set of strings (not a set of arrays).  Without
+    // this expand, set_intersect(OAuthDelegatedScopeList, KnownBypassScopes)
     // compares strings against arrays and always returns empty, breaking the
     // KnownBypass classification.
     | mv-expand Scope = Scopes to typeof(string)
     | summarize
         KnownBypassControls  = array_sort_asc(make_set(CaControlValue)),
-        KnownBypassAppRoles  = array_sort_asc(make_set(Scope)),
+        KnownBypassScopes    = array_sort_asc(make_set(Scope)),
         BypassCurrentState   = take_any(BypassCurrentState),
         BypassDescription    = take_any(BypassDescription)
         by AppId, AudienceId;
 // ---------------------------------------------------------------------------
 // Sensitive MS Graph permission classification (Cloud-Architekt EntraOps)
 // ---------------------------------------------------------------------------
-let SensitiveMsGraphPermissions =
-    externaldata(EAMTierLevelName: string, Category: string, AppRoleDisplayName: string)
-    ["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_AppRoles.json"]
-    with(format='multijson')
+let SensitiveMsGraphPermissions = externaldata(EAMTierLevelName: string, Category: string, ScopeDisplayName: string, AppId: string)
+    ["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/refs/heads/main/Classification/Classification_MsGraphScopes.json"] with(format='multijson')
     | project
-        AppRoleDisplayName,
-        AppRolePermissionTierLevel = tostring(EAMTierLevelName),
-        AppRoleCategory            = tostring(Category);
+        ScopeDisplayName,
+        ScopePermissionTierLevel = tostring(EAMTierLevelName),
+        ScopeCategory            = tostring(Category); 
 // ---------------------------------------------------------------------------
 // Lookup Source 1: Tenant telemetry name cache + seen-resource presence index
 // Both are derived from a single materialized scan of EntraIdSignInEvents so
@@ -274,13 +272,13 @@ let CAudiences =
     | extend _OauthScopeRaw = replace_string(_OauthScopeRaw, '\\', '')
     | mv-expand _Scope = parse_json(_OauthScopeRaw)
     | extend _ScopeStr = tostring(_Scope)
-    | lookup kind=leftouter SensitiveMsGraphPermissions on $left._ScopeStr == $right.AppRoleDisplayName
+    | lookup kind=leftouter SensitiveMsGraphPermissions on $left._ScopeStr == $right.ScopeDisplayName
     | extend _ScopeBag = iff(
         isnotempty(_ScopeStr),
         bag_pack(
             "scope",     _ScopeStr,
-            "tierLevel", coalesce(AppRolePermissionTierLevel, "Unknown"),
-            "category",  coalesce(AppRoleCategory, "Unknown")),
+            "tierLevel", coalesce(ScopePermissionTierLevel, "Unknown"),
+            "category",  coalesce(ScopeCategory, "Unknown")),
         dynamic(null))
     | summarize
         RequestId                  = take_any(OriginalRequestId),
@@ -373,17 +371,17 @@ EntraIdSignInEvents
     | where AppId == "*"
     | project-rename
         KnownBypassControls_wc = KnownBypassControls,
-        KnownBypassAppRoles_wc = KnownBypassAppRoles,
+        KnownBypassScopes_wc   = KnownBypassScopes,
         BypassCurrentState_wc  = BypassCurrentState,
         BypassDescription_wc   = BypassDescription
     | project-away AppId
   ) on AudienceId
 | extend
     KnownBypassControls = coalesce(KnownBypassControls, KnownBypassControls_wc),
-    KnownBypassAppRoles = coalesce(KnownBypassAppRoles, KnownBypassAppRoles_wc),
+    KnownBypassScopes = coalesce(KnownBypassScopes, KnownBypassScopes_wc),
     BypassCurrentState  = coalesce(BypassCurrentState,  BypassCurrentState_wc),
     BypassDescription   = coalesce(BypassDescription,   BypassDescription_wc)
-| project-away KnownBypassControls_wc, KnownBypassAppRoles_wc, BypassCurrentState_wc, BypassDescription_wc
+| project-away KnownBypassControls_wc, KnownBypassScopes_wc, BypassCurrentState_wc, BypassDescription_wc
 // Compute bypass classification for this audience entry using the observed
 // delegated scopes for the sign-in (OAuthDelegatedScopeList from the bridge).
 // set_intersect returns scopes that match the known bypass catalog entries.
@@ -401,7 +399,7 @@ EntraIdSignInEvents
 // is used here.  The full BaselineScopes union is retained as a let binding for
 // any future uses where client type is unavailable.
 //
-| extend _MatchedBypassRoles   = set_intersect(OAuthDelegatedScopeList, KnownBypassAppRoles)
+| extend _MatchedBypassRoles   = set_intersect(OAuthDelegatedScopeList, KnownBypassScopes)
 // _MatchedByDesign uses the client-type-specific baseline scope set so that scopes
 // exclusive to the confidential-client list (e.g. User.Read.All) are not incorrectly
 // treated as baseline for public clients.
@@ -438,7 +436,7 @@ EntraIdSignInEvents
     // for this resource but was not triggered by this specific sign-in.
     // By the time execution reaches here OAuthDelegatedScopeList is guaranteed
     // non-empty (the array_length == 0 case above already handled the empty case).
-    array_length(KnownBypassAppRoles) > 0,
+    array_length(KnownBypassScopes) > 0,
         "CatalogMatch - bypass entry in Entrascopes.com catalog for this resource; requested scopes do not match bypass pattern",
     "NoMatch - scopes present but no bypass pattern found"
 )

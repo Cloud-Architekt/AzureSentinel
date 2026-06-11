@@ -1,13 +1,13 @@
 id: 87770afa-b48b-4aea-b055-4bc48d805260
 Function:
   Title: Function to get a list of all classified and privileged Entra ID or App Roles that has been assigned in the last 24 hours.
-  Version: '1.0.0'
-  LastUpdated: '2023-11-11'
+  Version: "1.0.0"
+  LastUpdated: "2023-11-11"
 Category: Microsoft Sentinel Parser
 FunctionName: RecentAddedPrivileges
 FunctionAlias: RecentAddedPrivileges
 FunctionQuery: |
-  let SensitiveMsGraphPermissions = externaldata(EAMTierLevelName: string, Category: string, AppRoleDisplayName: string)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_AppRoles.json"] with(format='multijson');
+  let SensitiveMsGraphPermissions = externaldata(EAMTierLevelName: string, Category: string, AppRoleDisplayName: string)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_MsGraphAppRoles.json"] with(format='multijson');
   let SensitiveEntraDirectoryRoles = externaldata(Classification: string, RolePermissions: string, Category: string, RoleId: string, RoleName: string)["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/main/Classification/Classification_EntraIdDirectoryRoles.json"] with(format='multijson') | mv-expand parse_json(RolePermissions)
   | summarize Category = make_list(RolePermissions.Category) by RoleId, RoleName, Classification = tostring(parse_json(Classification).EAMTierLevelName);
   let AddedSensitiveApiPermissions = AuditLogs
