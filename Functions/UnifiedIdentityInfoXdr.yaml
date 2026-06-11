@@ -108,7 +108,7 @@ FunctionQuery: |
             TargetAppId: string,
             Category: string,
             EAMTierLevelName: string
-            ) [@"https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/refs/heads/tnh-EnhancedApiSupport/Classification/Classification_ApiPermissions.json"] with (format="multijson");
+            ) [@"https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/refs/heads/main/Classification/Classification_ApiPermissions.json"] with (format="multijson");
         let PrivilegedAzureRoles = dynamic(['Owner','Contributor','Access Review Operator Service Role','Azure File Sync Administrator','Role Based Access Control Administrator','User Access Administrator']);    
         let PrivilegedArmOperations = externaldata(
             RoleAction: string

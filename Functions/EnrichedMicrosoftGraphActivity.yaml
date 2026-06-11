@@ -31,7 +31,7 @@ FunctionQuery: |
         // Minimal Value of Critical Asset which will be classify as sensitive caller or target (default: 2 or lower)
         let MinCriticalAssetValue = 2;
         let SensitiveMsGraphScopes = externaldata(ScopeDisplayName: string, ScopeId: string, AppId: string, EAMTierLevelName: string, Category: string)
-            ["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/refs/heads/tnh-EnhancedApiSupport/Classification/Classification_MsGraphScopes.json"] with(format='multijson');
+            ["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/refs/heads/main/Classification/Classification_MsGraphScopes.json"] with(format='multijson');
         let ControlPlaneScopes = SensitiveMsGraphScopes | where EAMTierLevelName == "ControlPlane" | summarize by ScopeDisplayName;
         let ManagementPlaneScopes = SensitiveMsGraphScopes | where EAMTierLevelName == "ManagementPlane" | summarize by ScopeDisplayName;
         let PrivilegedGraphOperationsUri = (externaldata(Uri:string)

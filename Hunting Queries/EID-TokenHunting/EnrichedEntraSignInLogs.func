@@ -48,7 +48,7 @@ let EnrichedEntraSignInLogs = (UserPrincipalName:string, UserDeviceName:string="
         );
     // ControlPlane Graph API permission classification — used to flag high-sensitivity delegated scopes
     let HighSensitiveMsGraphPermissions = externaldata(EAMTierLevelName: string, Category: string, ScopeDisplayName: string, AppId: string)
-        ["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/refs/heads/tnh-EnhancedApiSupport/Classification/Classification_Scopes.json"] with(format='multijson')
+        ["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/refs/heads/main/Classification/Classification_Scopes.json"] with(format='multijson')
         | where EAMTierLevelName == "ControlPlane" and AppId == "00000003-0000-0000-c000-000000000000"
         | project ScopeDisplayName;
     // Entra ID error code descriptions — used to translate numeric error codes to human-readable messages

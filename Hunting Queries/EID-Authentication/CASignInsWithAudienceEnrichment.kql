@@ -178,7 +178,7 @@ let EntraScopesBypasses =
 // Sensitive MS Graph permission classification (Cloud-Architekt EntraOps)
 // ---------------------------------------------------------------------------
 let SensitiveMsGraphPermissions = externaldata(EAMTierLevelName: string, Category: string, ScopeDisplayName: string, AppId: string)
-    ["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/refs/heads/tnh-EnhancedApiSupport/Classification/Classification_MsGraphScopes.json"] with(format='multijson')
+    ["https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/refs/heads/main/Classification/Classification_MsGraphScopes.json"] with(format='multijson')
     | project
         ScopeDisplayName,
         ScopePermissionTierLevel = tostring(EAMTierLevelName),

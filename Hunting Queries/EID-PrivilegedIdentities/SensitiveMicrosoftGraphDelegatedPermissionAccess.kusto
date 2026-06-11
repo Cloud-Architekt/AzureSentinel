@@ -2,7 +2,7 @@ let SensitiveMsGraphPermissions = externaldata(
     EAMTierLevelName: string,
     Category: string,
     ScopeDisplayName: string
-    ) [@"https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/refs/heads/tnh-EnhancedApiSupport/Classification/Classification_MsGraphScopes.json"] with (format="multijson")
+    ) [@"https://raw.githubusercontent.com/Cloud-Architekt/AzurePrivilegedIAM/refs/heads/main/Classification/Classification_MsGraphScopes.json"] with (format="multijson")
     |;
 let SignInsWithDelegatedScope = union SigninLogs, AADNonInteractiveUserSignInLogs
 | where ResourceDisplayName == "Microsoft Graph"
