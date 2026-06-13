@@ -1,8 +1,8 @@
 id: 0cd18905-c644-4ad1-b70d-95195620ed98
 Function:
     Title: "Function to get summarized overview of application and workload identities from IdentityInfo and OAuthAppInfo table with API Permissions, Azure RBAC- and Entra ID roles with enriched details from my EntraOps classification, critical asset management and CSPM."
-    Version: "1.2.0"
-    LastUpdated: "2025-06-07"
+    Version: "1.3.0"
+    LastUpdated: "2025-06-13"
 Category: Microsoft Defender XDR Function
 FunctionName: WorkloadIdentityInfoXdr
 FunctionAlias: WorkloadIdentityInfoXdr
@@ -122,13 +122,13 @@ FunctionQuery: |
         | join kind=leftouter (
             AllGraphNodes
             | where NodeLabel == @"serviceprincipal" or NodeLabel == @"managedidentity"
-            | extend _np = parse_json(NodeProperties)["rawData"]
+            | extend rawData = parse_json(NodeProperties)["rawData"]
             | mv-expand EntityIds
             | where EntityIds.type == "AadObjectId"
             | extend EntityId = tostring(EntityIds.id)
             | extend ServicePrincipalId = tostring(extract("objectid=([\\w-]+)", 1, EntityId))
-            | extend ServicePrincipalType = tostring(_np["servicePrincipalType"])
-            | extend XspmCriticalAssetDetails = _np["criticalityLevel"]
+            | extend ServicePrincipalType = tostring(rawData["servicePrincipalType"])
+            | extend XspmCriticalAssetDetails = rawData["criticalityLevel"]
             | extend XspmGraphNodeDetails = bag_pack_columns(NodeId, NodeName, NodeLabel)
             | project ServicePrincipalId, ServicePrincipalType, XspmGraphNodeId = NodeId, XspmGraphNodeDetails, XspmCriticalAssetDetails
         ) on ServicePrincipalId
@@ -139,8 +139,10 @@ FunctionQuery: |
             | mv-expand EntityIds
             | where EntityIds.type == "AadApplicationId"
             | extend OAuthAppId = tostring(EntityIds.id)
+            | extend rawData = parse_json(NodeProperties)["rawData"]
+            | extend IsExternalApp = tobool(rawData["isBelongToExternalApplication"])
             | extend XspmGraphOAuthAppNodeDetails = bag_pack_columns(NodeId, NodeName, NodeLabel)
-            | project XspmGraphOAuthAppNodeDetails, OAuthAppId
+            | project XspmGraphOAuthAppNodeDetails, OAuthAppId, IsExternalApp
             ) on OAuthAppId
         // Lookup for Azure roles from Graph edges
         | join kind=leftouter (
@@ -259,6 +261,20 @@ FunctionQuery: |
         // Boost score for confirmed compromise or high Identity Protection risk
         | extend EntraOpsInvestigationScore = iff(RiskState =~ "confirmedCompromised" or RiskLevel =~ "high", max_of(EntraOpsInvestigationScore, 90), EntraOpsInvestigationScore)
         | project-away _TierScore, _CriticalityScore, _PrivilegeLevelScore
-        | project Timestamp, TimeGenerated, ServicePrincipalName, ServicePrincipalId, OAuthAppId, EntraOpsInvestigationScore, RiskScore, RiskLevel, RiskState, RiskDetail, CriticalityLevel, PrivilegeTierLevel, PrivilegeLevel, PrivilegeCategories, AddedOnTime, LastModifiedTime, AppStatus, VerifiedPublisher, IsAdminConsented, AppOrigin, AppOwnerTenantId, IsFirstPartyApp, ApiPermissions, AssignedAzureRoles, AssignedEntraRoles, AssignedGroupMembership, AuthenticatedBy, OwnedBy
+        | project
+            // Timestamps
+            Timestamp, TimeGenerated,
+            // Identity core
+            ServicePrincipalName, ServicePrincipalId, ServicePrincipalType, OAuthAppId,
+            // Risk & investigation scoring
+            EntraOpsInvestigationScore, RiskScore, RiskLevel, RiskState, RiskDetail,
+            // Privilege classification
+            CriticalityLevel, PrivilegeTierLevel, PrivilegeLevel, PrivilegeCategories,
+            // App metadata
+            AppStatus, IsExternalApp, IsFirstPartyApp, IsAdminConsented, VerifiedPublisher, AppOrigin, AppOwnerTenantId, AddedOnTime, LastModifiedTime,
+            // Permissions & assignments
+            ApiPermissions, AssignedEntraRoles, AssignedAzureRoles, AssignedGroupMembership,
+            // Graph relationships
+            AuthenticatedBy, OwnedBy
         };
     WorkloadIdentityInfoXdr(ServicePrincipalName, ServicePrincipalObjectId)
