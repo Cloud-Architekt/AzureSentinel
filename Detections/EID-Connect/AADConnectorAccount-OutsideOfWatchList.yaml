@@ -1,8 +1,13 @@
 id: 86e9ba6f-d1ed-48b8-a849-c26f77db8c1b
 name: Detection of Microsoft Entra Connect accounts outside of WatchLists
-version: 1.0.7
+version: 1.1.0
 kind: Scheduled
-description: User account with Directory role membership to "Directory Synchronization" or "On Premises Directory Sync Account" exists in WatchList or successfull sign in to Entra Connect APIs has been detected (outside of WatchList). Indicator of creating AAD connector account as backdoor.
+description: |
+  User account with directory role membership to "Directory Synchronization Accounts" or "On Premises Directory Sync Account",
+  or with a successful sign-in to one of the Microsoft Entra Connect APIs, which is not tagged as Entra Connect / Azure AD Connect
+  account in the "ServiceAccounts" watchlist. Indicator of creating an Entra Connect connector account as backdoor.
+  The result set states the concrete reason why the incident was raised: the matched synchronization role and/or the
+  Entra Connect API that was used for the sign-in, including source IP address, location and sign-in count.
 severity: Medium
 queryFrequency: 1h
 queryPeriod: 14d
@@ -17,38 +22,93 @@ relevantTechniques:
   - T1098
   - T1078
 query: |
-  // Query all users that habe the "Directory Synchronization Accounts" role assigned
-  let DirSyncRoleAssignedMembers = (IdentityInfo
+  // Known Microsoft Entra Connect API application IDs
+  let EntraConnectAppIds = dynamic(["cb1056e2-e479-49de-ae31-7812af012ed8", "6eb59a73-39b2-4c23-a70f-e2e3ce8965b1"]);
+  let SyncRoles = dynamic(["Directory Synchronization Accounts", "On Premises Directory Sync Account"]);
+  // Reason 1: accounts holding one of the directory synchronization roles
+  let DirSyncRoleAssignedMembers = (
+      IdentityInfo
       | where TimeGenerated > ago(14d)
       | summarize arg_max(TimeGenerated, *) by AccountObjectId
       | where IsAccountEnabled == true
-      | where AssignedRoles has "Directory Synchronization Accounts" or AssignedRoles has "On Premises Directory Sync Account"
+      | where AssignedRoles has_any (SyncRoles)
       | where isnull(DeletedDateTime) or DeletedDateTime > now()
-      | summarize by AccountObjectId);
-  // Query all users that have signed in to the AADSync API
-  let DirSyncNamedUsers = (SigninLogs
+      | mv-expand AssignedRole = todynamic(tostring(AssignedRoles)) to typeof(string)
+      | where AssignedRole in (SyncRoles)
+      | summarize AssignedSyncRoles = strcat_array(make_set(AssignedRole), ", ") by AccountObjectId
+      | extend DetectionReason = strcat("Directory synchronization role assigned: ", AssignedSyncRoles)
+  );
+  // Reason 2: successful sign-in to an Entra Connect API or with the Entra Connect naming pattern
+  let DirSyncNamedUsers = (
+      SigninLogs
       | where ingestion_time() > ago(70m)
-      // AADC APIs: AADSync = "cb1056e2-e479-49de-ae31-7812af012ed8", AAD Connect v2 = 6eb59a73-39b2-4c23-a70f-e2e3ce8965b1
-      | where (UserPrincipalName startswith "sync_" and UserPrincipalName endswith "onmicrosoft.com")
-          or AppId == "cb1056e2-e479-49de-ae31-7812af012ed8"
-          or AppId == "6eb59a73-39b2-4c23-a70f-e2e3ce8965b1"
       | where ResultType == 0
-      | summarize by AccountObjectId = UserId);
-  // Query all explicitly tagged Microsoft Entra Connect / Azure AD Connect account in the watchlist ServiceAccounts
+      | where (UserPrincipalName startswith "sync_" and UserPrincipalName endswith "onmicrosoft.com")
+          or AppId in (EntraConnectAppIds)
+      | extend EntraConnectApi = case(
+          AppId == "cb1056e2-e479-49de-ae31-7812af012ed8", "Microsoft Azure AD Sync (AADSync)",
+          AppId == "6eb59a73-39b2-4c23-a70f-e2e3ce8965b1", "Microsoft Entra Connect Sync V2",
+          "")
+      | extend SignInReason = iff(isnotempty(EntraConnectApi),
+          strcat("Successful sign-in to Entra Connect API: ", EntraConnectApi),
+          "Successful sign-in of account matching Entra Connect naming pattern (sync_*@*.onmicrosoft.com)")
+      | extend EntraConnectAppLabel = strcat(iff(isnotempty(EntraConnectApi), EntraConnectApi, AppDisplayName), " [", AppId, "]")
+      | extend SignInLocation = strcat(tostring(LocationDetails.countryOrRegion), "/", tostring(LocationDetails.city))
+      | summarize
+          DetectionReason = strcat_array(make_set(SignInReason), " / "),
+          EntraConnectAppsUsed = strcat_array(make_set(EntraConnectAppLabel, 10), ", "),
+          SignInIPAddresses = strcat_array(make_set(IPAddress, 10), ", "),
+          SignInLocations = strcat_array(make_set(SignInLocation, 10), ", "),
+          SuccessfulSignIns = count(),
+          LastSignIn = max(TimeGenerated)
+          by AccountObjectId = UserId
+  );
+  // Explicitly tagged Microsoft Entra Connect / Azure AD Connect accounts in the ServiceAccounts watchlist
   let WatchList = _GetWatchlist('ServiceAccounts')
       | where (['Tags'] has "Azure AD Connect") or (['Tags'] has "Entra Connect")
       | project AccountObjectId = ['Service AAD Object Id'];
-  // Combine the two lists and remove all known accounts
-  // All resulting accounts are not possibly not allowed to use this API or have the role assigned
+  // Combine both detection paths, drop all known accounts and keep the reason why the account matched
   union isfuzzy=true DirSyncRoleAssignedMembers, DirSyncNamedUsers
-  | summarize by AccountObjectId
+  | summarize
+      DetectionReason = strcat_array(make_set(DetectionReason), " + "),
+      AssignedSyncRoles = take_anyif(AssignedSyncRoles, isnotempty(AssignedSyncRoles)),
+      EntraConnectAppsUsed = take_anyif(EntraConnectAppsUsed, isnotempty(EntraConnectAppsUsed)),
+      SignInIPAddresses = take_anyif(SignInIPAddresses, isnotempty(SignInIPAddresses)),
+      SignInLocations = take_anyif(SignInLocations, isnotempty(SignInLocations)),
+      SuccessfulSignIns = sum(SuccessfulSignIns),
+      LastSignIn = max(LastSignIn)
+      by AccountObjectId
   | where AccountObjectId !in (WatchList)
-  | join kind=leftouter (IdentityInfo
+  | extend
+      AssignedSyncRoles = iff(isempty(AssignedSyncRoles), "None", AssignedSyncRoles),
+      EntraConnectAppsUsed = iff(isempty(EntraConnectAppsUsed), "No Entra Connect API sign-in in this interval", EntraConnectAppsUsed),
+      SignInIPAddresses = iff(isempty(SignInIPAddresses), "n/a", SignInIPAddresses),
+      SignInLocations = iff(isempty(SignInLocations), "n/a", SignInLocations),
+      SuccessfulSignIns = iff(isnull(SuccessfulSignIns), 0, SuccessfulSignIns)
+  | join kind=leftouter (
+      IdentityInfo
       | where TimeGenerated > ago(14d)
       | summarize arg_max(TimeGenerated, *) by AccountObjectId
+      | project AccountObjectId, AccountUPN, AccountDisplayName, AccountCreationTime,
+          IsAccountEnabled, UserType, AllAssignedRoles = AssignedRoles, GroupMembership
       )
       on AccountObjectId
-  | project-away *1, TimeGenerated
+  | project
+      DetectionReason,
+      AssignedSyncRoles,
+      EntraConnectAppsUsed,
+      SignInIPAddresses,
+      SignInLocations,
+      SuccessfulSignIns,
+      LastSignIn,
+      AccountUPN,
+      AccountDisplayName,
+      AccountObjectId,
+      IsAccountEnabled,
+      AccountCreationTime,
+      UserType,
+      AllAssignedRoles,
+      GroupMembership
 suppressionEnabled: false
 incidentConfiguration:
   createIncident: true
@@ -62,6 +122,24 @@ incidentConfiguration:
     groupByCustomDetails: []
 eventGroupingSettings:
   aggregationKind: SingleAlert
+alertDetailsOverride:
+  alertDisplayNameFormat: 'Entra Connect account outside of WatchList - {{AccountUPN}}'
+  alertDescriptionFormat: |-
+    Account {{AccountUPN}} ({{AccountObjectId}}) was flagged because: {{DetectionReason}}.
+    Assigned synchronization role(s): {{AssignedSyncRoles}}
+    Entra Connect API used for sign-in: {{EntraConnectAppsUsed}}
+    Successful sign-ins: {{SuccessfulSignIns}} - last sign-in: {{LastSignIn}}
+    Sign-in source IP(s): {{SignInIPAddresses}} - location(s): {{SignInLocations}}
+    The account is not tagged as "Entra Connect" or "Azure AD Connect" in the ServiceAccounts watchlist.
+  alertDynamicProperties: []
+customDetails:
+  DetectionReason: DetectionReason
+  AssignedSyncRoles: AssignedSyncRoles
+  EntraConnectApi: EntraConnectAppsUsed
+  SignInIPAddresses: SignInIPAddresses
+  SignInLocations: SignInLocations
+  SuccessfulSignIns: SuccessfulSignIns
+  LastSignIn: LastSignIn
 entityMappings:
   - entityType: Account
     fieldMappings:
