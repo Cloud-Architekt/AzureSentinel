@@ -90,29 +90,79 @@ $TestResultsJSON = Get-Content -Path $TestResultsJsonFile | ConvertFrom-Json -De
 $TestResultsCleanJSON = $TestResultsJSON.tests | Select-Object -ExcludeProperty ErrorRecord, ScriptBlock, ScriptBlockFile, Duration
 foreach ($TestResult in $TestResultsCleanJSON) { 
 
-    $TestResultDetail = $TestResult.ResultDetail.TestResult 
+    $TestResultDetail = ($TestResult.ResultDetail.TestResult | ConvertFrom-Markdown).html
 
-    # Extract lines that are part of the markdown table
-    $TestResultDetailMarkdown = $TestResultDetail -split "`n" | Where-Object { $_ -match '^\s*\|' }
+    $TableIndex = -1 #get all tables
+    
+    $xml = [xml]("<root>$TestResultDetail</root>")
+    $tables = $xml.SelectNodes('//table')
+    if (-not $tables) { return }
 
-    if ($TestResultDetailMarkdown.Count -ge 3) {
-        # Extract headers
-        $headers = ($TestResultDetailMarkdown[0] -split '\|').Trim() | Where-Object { $_ -ne "" }
-        # Parse rows (skip header and separator)
-        $rows = $TestResultDetailMarkdown[2..($tableLines.Count - 1)]
-        # Convert each row to PSCustomObject
-        $objects = foreach ($row in $rows) {
-            $values = ($row -split '\|').Trim() | Where-Object { $_ -ne "" }
-            $props = @{}
-            for ($i = 0; $i -lt $headers.Count; $i++) {
-                $props[$headers[$i]] = $values[$i]
-            }
-            [PSCustomObject]$props
+    if ($TableIndex -ge 0) {
+        if ($TableIndex -ge $tables.Count) {
+            throw "TableIndex $TableIndex out of range (found $($tables.Count) table[s])."
         }
-            $TestResult.ResultDetail | Add-Member -MemberType NoteProperty -Name 'TestResultTable' -Value $objects -Force
-    } else {
-        Write-Verbose "No markdown table found."
+        $tables = , $tables[$TableIndex]
     }
+
+    $tblNum = 0
+    foreach ($table in $tables) {
+        $headerNodes = $table.SelectNodes('./thead/tr/th')
+        if (-not $headerNodes) {
+            # no thead -> treat first row as header and remove it from data
+            $first = $table.SelectSingleNode('./tr[1] | ./tbody/tr[1]')
+            if ($first) {
+                $headerNodes = $first.SelectNodes('./th|./td')
+                $first.ParentNode.RemoveChild($first) | Out-Null
+            }
+        }
+
+        $headers = for ($i = 0; $i -lt $headerNodes.Count; $i++) {
+            $name = $headerNodes[$i].InnerText.Trim()
+            if (-not $name) { $name = "Column$($i+1)" }
+            $name = $name -replace '\s+', '' -replace '[^A-Za-z0-9_]', ''
+            $orig = $name; $dup = 1
+            while ($_ = $headers | Where-Object { $_ -eq $name }) {
+                $dup++; $name = "${orig}_$dup"
+            }
+            $name
+        }
+
+        $rows = $table.SelectNodes('./tbody/tr')
+        if (-not $rows) { $rows = $table.SelectNodes('./tr') }
+
+        foreach ($row in $rows) {
+            $o = [ordered]@{ }
+            $cells = $row.SelectNodes('./td|./th')
+
+            for ($c = 0; $c -lt $cells.Count; $c++) {
+                $prop = if ($c -lt $headers.Count) { $headers[$c] } else { "Column$($c+1)" }
+                $cell = $cells[$c]
+                $raw = $cell.InnerText.Trim()
+
+                #  hyperlinks
+                $a = $cell.SelectSingleNode('./a')
+                if ($a) {
+                    $o["${prop}Text"] = $a.InnerText.Trim()
+                    $o["${prop}Link"] = $a.href
+                    $raw = $a.InnerText.Trim()
+                }
+                # stupid icons
+                if ($raw -match '^(✓|✔|☑|✅)$' -or $raw -eq 'True') { $val = $true }
+                elseif ($raw -match '^(✗|×|❌)$' -or $raw -eq 'False') { $val = $false }
+                else {
+                    $dt = [datetime]::MinValue
+                    if ([datetime]::TryParse($raw, [ref]$dt)) { $val = $dt }
+                    else { $val = $raw }
+                }
+                $o[$prop] = $val
+            }
+            $tableObject = [pscustomobject]$o
+        }
+        $tblNum++
+    }
+
+     $TestResult.ResultDetail | Add-Member -MemberType NoteProperty -Name 'TestResultTable' -Value $tableObject -Force
 
     Write-Host $($TestResult.Id)
     $TestResult | ConvertTo-Json -Depth 10 | Out-File -FilePath "./temp/$($TestResult.Index).json" -Encoding utf8
